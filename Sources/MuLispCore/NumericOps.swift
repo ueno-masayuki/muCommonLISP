@@ -382,7 +382,7 @@ public enum NumericOps {
             if r * r == i { return .int(r) }
             return .double(Double(i).squareRoot())
         case .bignum(let b) where b >= 0:
-            let r = b.squareRoot()
+            let r = BigInt(b.magnitude.squareRoot())
             if r * r == b { return makeInteger(r) }
             return .double(Double(b).squareRoot())
         case .complex(let c):

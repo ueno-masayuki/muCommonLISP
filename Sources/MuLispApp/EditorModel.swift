@@ -57,9 +57,6 @@ final class EditorState: ObservableObject {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        if #available(macOS 12.0, *) {
-            panel.allowedContentTypes = []   // any file
-        }
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
             open(url: url)

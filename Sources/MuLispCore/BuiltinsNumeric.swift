@@ -273,9 +273,12 @@ extension Interpreter {
             try wrapNumeric { try NumericOps.sqrtValue(args[0].firstValue) }
         }
 
-        defBuiltin("ISQRT", 1, 1) { args in
+        defBuiltin("ISQRT", 1, 1) { [unowned self] args in
             let b = try requireBigInt(args[0])
-            return NumericOps.makeInteger(b.squareRoot())
+            guard b >= 0 else {
+                throw self.typeError(args[0], expected: "(INTEGER 0)")
+            }
+            return NumericOps.makeInteger(BigInt(b.magnitude.squareRoot()))
         }
 
         func mathFn(_ name: String, _ f: @escaping (Double) -> Double) {

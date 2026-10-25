@@ -8,7 +8,10 @@ public enum Disassembler {
     public static func disassemble(_ code: CodeObject, indent: String = "") -> String {
         var out = "\(indent);; code \(code.name)  (frame size \(code.frameSize))\n"
         for (i, inst) in code.instructions.enumerated() {
-            out += String(format: "%@%4d  %@\n", indent, i, describe(inst, code))
+            let number = String(i)
+            let padding = String(repeating: " ",
+                                 count: max(0, 4 - number.count))
+            out += "\(indent)\(padding)\(number)  \(describe(inst, code))\n"
         }
         for (i, child) in code.children.enumerated() {
             out += "\(indent);; child [\(i)]\n"
