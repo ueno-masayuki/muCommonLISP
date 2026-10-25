@@ -84,7 +84,8 @@ final class EvalTests: XCTestCase {
         XCTAssertEqual(ev(interp, "(- 10 3 2)"), "5")
         XCTAssertEqual(ev(interp, "(* 2 3 4)"), "24")
         XCTAssertEqual(ev(interp, "(/ 10 2)"), "5")
-        XCTAssertEqual(ev(interp, "(/ 1 2)"), "0.5")
+        // Exact rational division (the numeric tower includes ratios).
+        XCTAssertEqual(ev(interp, "(/ 1 2)"), "1/2")
         XCTAssertEqual(ev(interp, "(+ 1.5 2)"), "3.5")
         XCTAssertEqual(ev(interp, "(- 5)"), "-5")
         XCTAssertEqual(ev(interp, "(mod 7 3)"), "1")

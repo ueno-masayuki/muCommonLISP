@@ -1,168 +1,159 @@
 # muCommonLISP
 
-Mac の GUI 環境で動作する、コンパイラ搭載のマイクロ Common Lisp 処理系です。
-Swift + SwiftUI で実装されており、REPL とグラフィックスキャンバスを備えた
-macOS アプリとして動作します。プロトタイプの実行を想定し、
-**バイトコードコンパイラ＋スタック VM** による実行と **CLOS のフル実装
-（ユーザレベル）** を特徴とします。
+Mac の GUI 環境で動作する、コンパイラ搭載の Common Lisp 処理系です。
+Swift + SwiftUI で実装され、**ビルトインエディタ・REPL・複数のグラフィックス
+ウィンドウ**を備えた macOS アプリとして動作します。実行エンジンは
+**バイトコードコンパイラ＋スタック VM**、オブジェクトシステムは
+**ユーザレベル CLOS フル実装＋基本 MOP** です。
 
 ## 構成
 
 | ターゲット | 内容 |
 |---|---|
-| `MuLispCore` | 処理系本体（リーダ・コンパイラ・VM・CLOS・組み込み関数） |
-| `muCommonLISP` | macOS GUI アプリ（REPL ＋ グラフィックスキャンバス） |
+| `MuLispCore` | 処理系本体（リーダ・コンパイラ・VM・CLOS・条件/再起動系・数値塔） |
+| `muCommonLISP` | macOS GUI アプリ（エディタ ＋ REPL ＋ グラフィックス） |
 | `mulisp` | コマンドライン REPL / ファイル実行（macOS・Linux） |
+
+依存パッケージ: [attaswift/BigInt](https://github.com/attaswift/BigInt)（多倍長整数。初回ビルド時に自動取得）
 
 ## ビルドと実行（macOS 13 以降 / Xcode 15 以降）
 
 ```sh
-# GUI アプリを起動
-swift run muCommonLISP
-
-# コマンドライン REPL
-swift run mulisp
-
-# ファイルを実行
-swift run mulisp Examples/hello.lisp
-
-# テスト一式
-swift test
-
-# Lisp レベルの自己テスト
-swift run mulisp Examples/suite.lisp
-
-# ベンチマーク（release ビルド推奨）
-swift run -c release mulisp Examples/bench.lisp
-
-# 描画デモを SVG に書き出し（GUI なしで描画確認）
+swift run muCommonLISP                       # GUI アプリ
+swift run mulisp                             # CLI REPL
+swift run mulisp Examples/fullcl-demo.lisp   # 新機能ツアー
+swift test                                   # テスト一式（約150項目）
+swift run mulisp Examples/suite.lisp         # Lisp 自己テスト
+swift run -c release mulisp Examples/bench.lisp   # ベンチマーク
 swift run mulisp --svg Examples/graphics-demo.lisp out.svg
-
-# .app バンドルの作成
-scripts/make-app.sh
-open dist/muCommonLISP.app
+scripts/make-app.sh                          # .app バンドル生成
 ```
-
-Xcode で開く場合は `Package.swift` をダブルクリックし、
-スキーム `muCommonLISP` を選んで実行してください。
 
 ## GUI の使い方
 
-- 左ペイン: REPL。下の入力欄に式を書き **⌘⏎** で評価します。
-  **⌘↑ / ⌘↓** で入力履歴を移動します。
-- 右ペイン: グラフィックスキャンバス。`(draw-line ...)` などで描画されます。
-- ツールバー: 実行中の評価の **中断**、キャンバス消去、履歴消去。
-- 評価はバックグラウンドスレッドで行われるため、長い計算中も UI は固まりません。
+- **エディタ（左上）**: 複数タブ、開く/保存/別名保存、シンタックスハイライト、
+  括弧対応表示、自動インデント、**Tab でシンボル補完**、**⌘J で定義ジャンプ**。
+  **⌘E** でカーソル位置のトップレベル式（または選択範囲）を評価、
+  **⌘⇧E** でバッファ全体を評価。結果は REPL に表示されます。
+- **REPL（左下）**: ⌘⏎ で評価、⌘↑/⌘↓ で履歴。
+- **キャンバス（右）**: メインの描画先。ツールバーでエディタ表示切替・中断・消去。
+- **グラフィックスウィンドウ**: `(make-graphics-window ...)` で独立した
+  ウィンドウをいくつでも生成できます（下記）。
 
-### 描画関数
+### グラフィックス API
 
 ```lisp
-(clear-graphics)                      ; キャンバスを消去
-(set-color r g b [a])                 ; 色 (各成分 0.0〜1.0)
-(set-line-width w)
-(draw-line x1 y1 x2 y2)
-(draw-rect x y w h [fill])            ; fill に t で塗り潰し
-(draw-circle x y r [fill])
-(draw-text x y "string" [size])
-(draw-point x y)
-(canvas-size)                         ; => (values width height)
+;; メインキャンバスへ（従来どおり）
+(draw-line x1 y1 x2 y2)  (draw-rect x y w h [fill])  (draw-circle x y r [fill])
+(draw-text x y "str" [size])  (draw-point x y)
+(set-color r g b [a])  (set-line-width w)  (clear-graphics)  (canvas-size)
+
+;; ウィンドウ生成と描画（全描画関数は第1引数にウィンドウを取れる）
+(defparameter *w* (make-graphics-window :title "plot" :width 400 :height 300))
+(set-color *w* 1 0 0)
+(draw-line *w* 0 0 100 100)
+(close-graphics-window *w*)
+(with-graphics-window (w :title "temp") (draw-circle w 50 50 20))
+(save-graphics-svg "out.svg" [*w*])   ; SVG 書き出し（CLI でも使用可）
 ```
 
-`Examples/graphics-demo.lisp` にまとまったデモがあります。
+## 言語機能（ANSI Common Lisp のサブセット — 広範囲）
 
-## 実行エンジン（速度重視の設計）
+### 数値塔
+- **多倍長整数**（fixnum があふれると自動で bignum へ）
+- **分数**: `(/ 1 3)` → `1/3`、正確な `floor/ceiling/round/truncate`（多値）、
+  `numerator/denominator/rational`
+- **複素数**: `#C(1 2)`、`complex/realpart/imagpart/conjugate/phase/cis`、
+  `(sqrt -1)` → `#C(0.0 1.0)`
+- `gcd/lcm/ash/logand...`（bignum 対応）、`signum/isqrt/integer-length`
 
-- `read → マクロ展開 → バイトコードコンパイル → VM 実行` のパイプライン。
-  `eval` も内部でコンパイルします（木構造インタプリタは持ちません）。
-- レキシカル変数はコンパイル時にフレームのスロット番号へ解決され、
-  実行時の名前探索はありません。
-- **末尾呼び出し最適化**: 末尾再帰・末尾相互再帰は定数スタックで回ります
-  （`Examples/bench.lisp` の 500 万回カウントダウン参照）。
-- `car/cdr/cons/+/-/*//=/</>` 等は専用バイトコード命令に直接コンパイルされます。
-- 総称関数は引数クラス列でメソッド探索結果をキャッシュします。
-- `(disassemble 'f)` でバイトコードを確認、`(time expr)` で計測、
-  `(compile nil '(lambda ...))` でクロージャをその場でコンパイルできます。
+### データ型
+- **可変文字列**: `(setf (char s i) c)`、`make-string`、`nstring-upcase` 等
+- **多次元配列**: `(make-array '(2 3))`、`#2A((1 2)(3 4))` リテラル、
+  **フィルポインタ**（`vector-push/-extend/-pop`）、`adjust-array`
+- ハッシュ表（4種のテスト、`maphash`、loop 連携）、構造体（CLOS 統合）
 
-## CLOS
+### 制御構造
+- `tagbody/go`（クロージャ越しの go も可）、`prog/prog*`、`psetq`、並列 `do`
+- **条件システム＋再起動**: `handler-case` `handler-bind` `restart-case`
+  `invoke-restart` `find-restart` `compute-restarts` `abort` `continue`
+  `use-value` `store-value` `muffle-warning` `cerror` `with-simple-restart`
+- `macrolet` `symbol-macrolet` `define-symbol-macro` `progv`
+- 多値: `multiple-value-bind/-call/-prog1/-list/-setq` `nth-value` `values-list`
+- 場所系（部分式は一度だけ評価）: `push pop incf decf pushnew rotatef shiftf
+  remf (setf getf)`、`defsetf`（短縮形）
 
-ユーザレベルの CLOS を一通りサポートします。
+### LOOP（拡張サブセット）
+`for from/downfrom to/downto/below/above by` / `in` / `on` / `across` /
+`= then` / **破壊パターン** `for (a b) in` / **ハッシュ**
+`being the hash-keys of h using (hash-value v)` / `with...and` / `repeat` /
+`while until` / `collect append nconc sum count maximize minimize` /
+**`into`** / **`when if unless else end`** / **`always never thereis`** /
+`named` / `initially finally [return]` / 節なし無限ループ＋`return`
 
-- `defclass`: **多重継承**（ANSI のクラス優先順位リスト計算）、スロットオプション
-  `:initarg :initform :accessor :reader :writer :allocation (:instance / :class)
-  :documentation`
-- `defgeneric` / `defmethod`: 全必須引数での**多重ディスパッチ**、
-  **EQL スペシャライザ** `((n (eql 0)))`、組み込み型
-  （`integer` `string` `cons` …）へのディスパッチ
-- **標準メソッド結合**: primary / `:before` / `:after` / `:around`、
-  `call-next-method`、`next-method-p`
-- `make-instance` → `initialize-instance` → `shared-initialize` プロトコル
-  （`:after` メソッド等をユーザ定義可能）、`reinitialize-instance`
-- `slot-value` `(setf slot-value)` `slot-boundp` `slot-makunbound`
-  `slot-exists-p` `with-slots` `with-accessors`
-- **クラス再定義**（既存インスタンスは遅延更新）、`change-class`
-- `print-object` 総称関数（プリンタが自動的に呼びます）
-- `defstruct` は構造体クラスとして CLOS に統合
-  （`:include` `:conc-name` `:constructor` `:predicate` `:copier` 対応）
+### FORMAT（拡張サブセット）
+`~A ~S ~D ~B ~O ~X ~R`（基数・英語数詞・`~@R` ローマ数字・`~:D` 桁区切り）
+`~F ~E ~G ~$ ~C ~P`（複数形）`~T ~% ~& ~| ~~ ~*`（引数移動）`~?`
+`~{ ~}`（`~:{` `~@{` 対応）`~[ ~; ~]`（`~:[` `~@[`）`~( ~)`（大文字小文字変換）
+`~^`、数値・文字パラメータ（`~10A` `~,2F` `~'0,4D` `v` `#`）、`:`/`@` 修飾子
 
-条件システム（`error` `signal` `handler-case` `ignore-errors`
-`unwind-protect`）も条件クラス階層（`condition > error > type-error ...`）
-ごと CLOS 上に実装されています。
+### CLOS ＋ MOP
+- フル CLOS: 多重継承（ANSI CPL）、多重ディスパッチ、EQL スペシャライザ、
+  `:before/:after/:around`、`call-next-method`、クラス再定義、`change-class`、
+  `initialize-instance` プロトコル、`print-object`、`:allocation :class`
+- **メソッド結合**: 短縮形オペレータ結合 `+ and or list progn max min append`
+  ＋ `define-method-combination`（短縮形）、
+  `defgeneric (:method-combination x)`、`(defmethod f + ((x c)) ...)`
+- **MOP（基本）**: `class-direct-superclasses/-subclasses`
+  `class-precedence-list` `class-(direct-)slots`＋`slot-definition-*`
+  `generic-function-methods` `allocate-instance`
 
-## サポートする主な機能
-
-- 特殊形式: `quote quasiquote if progn let let* lambda function setq setf
-  defun defmacro defvar defparameter defconstant and or block return-from
-  catch throw unwind-protect multiple-value-bind flet labels
-  symbol-macrolet the locally eval-when`
-- マクロ（prelude で定義）: `when unless cond case ecase typecase etypecase
-  dolist dotimes do do* push pop incf decf prog1 prog2 return
-  with-slots with-accessors handler-case ignore-errors assert check-type
-  time with-output-to-string loop（サブセット）`
-- `loop` サブセット: `for i from a to/below b by c` / `for x in/on lst` /
-  `for x across vec` / `for x = e then e2` / `with` / `repeat` /
-  `while` / `until` / `do` / `collect` / `append` / `sum` / `count` /
-  `maximize` / `minimize` / `initially` / `finally`、
-  および節なしの無限ループ `(loop ... )` ＋ `(return ...)`
-- 数値: 整数（64bit）・浮動小数点数、`floor/ceiling/round/truncate`（多値）、
-  超越関数、ビット演算、`random`
-- データ: リスト・文字列・文字・シンボル・ベクタ（1 次元）・ハッシュ表・
-  パッケージ（簡易版: `defpackage` `in-package` `intern` 等）
-- `format` サブセット: `~A ~S ~D ~X ~O ~B ~F ~C ~% ~& ~~ ~{ ~} ~^`
-  （`~10A` `~,2F` などの前置パラメータ対応）
+### パッケージ・入出力・その他
+- パッケージ: external/internal 区別、`defpackage (:use :export :nicknames
+  :shadow)` `export/import/shadow/use-package/unintern`
+  `do-symbols/do-external-symbols` `apropos`
+- ファイル IO: `open/close/with-open-file`（`:direction :if-exists`）
+  `read-char/read-line/peek-char/read` `load` `probe-file/delete-file/directory`
+  `with-input-from-string`、`*standard-output*` の再束縛が全出力関数に反映
+- リーダ: `#x #o #b #nR #C #nA #. #+/#- #\\ #' #( #:`、分数/多倍長リテラル、
+  `set-macro-character` によるユーザリーダマクロ
+- 内省: `describe/inspect` `documentation`（defun の docstring 保存）
+  `trace/untrace` `apropos` `*features*` `time` `disassemble` `compile`
+- 時刻: `get-universal-time` `decode/encode-universal-time` `get-decoded-time`
 
 ## 非サポート（主なもの）
 
-- 多倍長整数・分数・複素数（整数は 64bit、桁あふれは浮動小数点数に転化。
-  `(/ 1 2)` は `0.5` になります）
-- `tagbody` / `go` / `progv` / `macrolet` / `handler-bind` / restart 系
-- MOP（メタオブジェクトプロトコル）と `define-method-combination`
-- ファイル入出力ストリーム、`load`（CLI でのファイル実行で代用）
-- 文字列の破壊的変更（文字列は不変）
-- パッケージの export / internal 区別（全シンボルが見えます）
-- `do` は `do*`（逐次束縛）の意味で動作します
-- `setf` は値を場所の部分式より先に評価します
-- メモリ管理は Swift の ARC に依存します。`labels` の相互再帰クロージャなど
-  循環参照を作るオブジェクトは解放されません（長時間セッションでの既知の制約）
+- 完全な MOP（ユーザ定義メタクラスによるスロットアクセスのフック等）と
+  `define-method-combination` の完全（長い）形式
+- `compile-file` / fasl、論理パスネーム、双方向・ソケットストリーム
+- `handler-bind` は `error`/`signal`/`warn`/`cerror` で通知された条件には
+  通知時点で介入できますが、組み込み関数が直接投げたエラーには
+  巻き戻し後にしか介入できません（restart との併用は `error` 経由を推奨）
+- 文字列は Unicode 書記素単位（CL の char-code 系は先頭スカラで近似）
+- `setf` は一部の場所で値を場所の部分式より先に評価します
+- メモリ管理は ARC（循環参照を作るクロージャは解放されません）
 
 ## REPL の例
 
 ```lisp
-muCL> (defclass point ()
-        ((x :initarg :x :accessor point-x)
-         (y :initarg :y :accessor point-y)))
-=> #<CLASS POINT>
+muCL> (expt 2 100)
+=> 1267650600228229401496703205376
 
-muCL> (defmethod print-object ((p point) stream)
-        (format stream "#<POINT ~A,~A>" (point-x p) (point-y p)))
-=> PRINT-OBJECT
+muCL> (+ 1/2 1/3)
+=> 5/6
 
-muCL> (make-instance 'point :x 1 :y 2)
-=> #<POINT 1,2>
+muCL> (loop for i from 10 downto 1 when (evenp i) collect i)
+=> (10 8 6 4 2)
 
-muCL> (loop for i from 1 to 10 collect (* i i))
-=> (1 4 9 16 25 36 49 64 81 100)
+muCL> (format nil "~@R 年 (~:D)" 2026 1234567)
+=> "MMXXVI 年 (1,234,567)"
 
-muCL> (time (fib 25))   ; fib は Examples/bench.lisp 参照
+muCL> (handler-bind ((error (lambda (c) (invoke-restart 'use-value 0))))
+        (restart-case (error "no data") (use-value (v) v)))
+=> 0
+
+muCL> (make-graphics-window :title "plot")
+=> #<GRAPHICS-WINDOW "plot">
 ```
 
 ## ライセンス・用途
