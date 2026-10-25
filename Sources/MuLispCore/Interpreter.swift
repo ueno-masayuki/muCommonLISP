@@ -36,6 +36,9 @@ public final class Interpreter {
     var tracedFunctions: [ObjectIdentifier: LispFunction] = [:]
     var traceDepth = 0
 
+    /// DEFINE-METHOD-COMBINATION (short form) registry.
+    var methodCombinations: [ObjectIdentifier: (op: Symbol, identity: Bool)] = [:]
+
     public var gensymCounter = 0
     public let graphics = GraphicsContext2D()
 
@@ -117,6 +120,8 @@ public final class Interpreter {
         registerPlaceMacros()
         registerStreamBuiltins()
         registerIntrospection()
+        registerSequenceBuiltins()
+        registerMOP()
 
         // Standard output stream object (for explicit stream arguments and
         // *STANDARD-OUTPUT* rebinding).

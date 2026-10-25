@@ -531,7 +531,7 @@ extension Interpreter {
                             self.tValue])
         }
 
-        defBuiltin("%ENSURE-GF", 2, 3) { [unowned self] args in
+        defBuiltin("%ENSURE-GF", 2, 4) { [unowned self] args in
             guard case .symbol(let s) = args[0].firstValue,
                   case .int(let n) = args[1].firstValue else {
                 throw self.lispError("ERROR", "malformed %ensure-gf call")
@@ -539,6 +539,11 @@ extension Interpreter {
             let gf = try self.ensureGenericFunction(named: s, nRequired: n)
             if args.count > 2, case .string(let doc) = args[2].firstValue {
                 gf.documentation = doc.string
+            }
+            if args.count > 3, case .symbol(let combo) = args[3].firstValue {
+                if combo.name != "STANDARD" {
+                    gf.combination = combo
+                }
             }
             return .symbol(s)
         }
@@ -605,8 +610,8 @@ extension Interpreter {
             case "AFTER": qualifier = .after
             case "AROUND": qualifier = .around
             default:
-                throw self.lispError("ERROR",
-                    "unsupported method qualifier \(qual.name)")
+                // Operator method combination qualifier (e.g. + or PROGN).
+                qualifier = .custom(qual)
             }
             var specializers: [Specializer] = []
             for s in args[2].asArray() ?? [] {
@@ -774,15 +779,17 @@ extension Interpreter {
         }
         let nameDes = forms[0]
         var idx = 1
-        var qualifier = "PRIMARY"
-        if case .symbol(let q) = forms[idx], q.isKeyword || q.name == "AROUND" {
+        var qualifierForm: LispValue = .symbol(registry.lisp.intern("PRIMARY"))
+        if case .symbol(let q) = forms[idx] {
+            // A bare symbol before the lambda list is a qualifier
+            // (:before/:after/:around or a method-combination name).
             switch q.name {
             case "BEFORE", "AFTER", "AROUND":
-                qualifier = q.name
-                idx += 1
+                qualifierForm = .symbol(registry.lisp.intern(q.name))
             default:
-                throw CompileError("unsupported method qualifier :\(q.name)")
+                qualifierForm = .symbol(q)
             }
+            idx += 1
         }
         guard idx < forms.count else {
             throw CompileError("defmethod missing lambda list")
@@ -840,7 +847,7 @@ extension Interpreter {
                              LispValue.list([sym("BLOCK"), blockName] + body))
         return lst(sym("%ADD-METHOD"),
                    quoted(nameDes),
-                   quoted(.symbol(registry.lisp.intern(qualifier))),
+                   quoted(qualifierForm),
                    LispValue.list([sym("LIST")] + specializerForms),
                    lambdaForm)
     }
@@ -857,6 +864,7 @@ extension Interpreter {
             nRequired += 1
         }
         var doc: LispValue = .null
+        var combination: LispValue = .null
         var methodForms: [LispValue] = []
         for opt in forms.dropFirst(2) {
             guard let parts = opt.asArray(), !parts.isEmpty,
@@ -864,6 +872,8 @@ extension Interpreter {
             switch k.name {
             case "DOCUMENTATION":
                 if parts.count == 2 { doc = parts[1] }
+            case "METHOD-COMBINATION":
+                if parts.count >= 2 { combination = parts[1] }
             case "METHOD":
                 methodForms.append(
                     try expandDefmethod([forms[0]] + Array(parts.dropFirst())))
@@ -872,7 +882,7 @@ extension Interpreter {
             }
         }
         let ensure = lst(sym("%ENSURE-GF"), quoted(forms[0]),
-                         .int(nRequired), doc)
+                         .int(nRequired), doc, quoted(combination))
         if methodForms.isEmpty {
             return ensure
         }

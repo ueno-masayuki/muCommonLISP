@@ -9,8 +9,11 @@ public enum Specializer {
     case eql(LispValue)
 }
 
-public enum MethodQualifier {
+public enum MethodQualifier: Equatable {
     case primary, before, after, around
+    /// Operator method combinations (DEFINE-METHOD-COMBINATION short form):
+    /// the qualifier is the combination name (e.g. + or PROGN).
+    case custom(Symbol)
 }
 
 public final class MethodObj {
@@ -50,7 +53,8 @@ private struct DispatchKey: Hashable {
 public final class GenericFunction: LispFunction {
     public var methods: [MethodObj] = []
     public var nRequired: Int
-    public var documentation: String?
+    /// Non-nil = operator method combination with this name.
+    public var combination: Symbol?
     fileprivate var cache: [DispatchKey: [MethodObj]] = [:]
     fileprivate var hasEql: Bool = false
 
@@ -188,6 +192,10 @@ extension Interpreter {
             case .before: befores.append(m)
             case .after: afters.append(m)
             case .around: arounds.append(m)
+            case .custom(let q):
+                if let combo = gf.combination, q === combo {
+                    primaries.append(m)
+                }
             }
         }
         if primaries.isEmpty {
@@ -203,27 +211,70 @@ extension Interpreter {
             return try applyFunction(m.function, callArgs)
         }
 
-        // Chain of primary methods (CALL-NEXT-METHOD walks it).
-        var primaryChain: (([LispValue]) throws -> LispValue)? = nil
-        for m in primaries.reversed() {
-            let captured = primaryChain
-            primaryChain = { callArgs in
-                try invokeMethod(m, callArgs, next: captured)
-            }
-        }
+        let core: ([LispValue]) throws -> LispValue
 
-        // Core: befores (most specific first), primaries, afters (least
-        // specific first).
-        let aftersReversed = Array(afters.reversed())
-        let core: ([LispValue]) throws -> LispValue = { callArgs in
-            for b in befores {
-                _ = try invokeMethod(b, callArgs, next: nil)
+        if let combo = gf.combination {
+            // Operator method combination (short form).
+            core = { [unowned self] callArgs in
+                switch combo.name {
+                case "AND":
+                    var result = self.tValue
+                    for m in primaries {
+                        result = try invokeMethod(m, callArgs, next: nil)
+                        if !result.isTrue { return result }
+                    }
+                    return result
+                case "OR":
+                    for m in primaries {
+                        let result = try invokeMethod(m, callArgs, next: nil)
+                        if result.isTrue { return result }
+                    }
+                    return .null
+                case "PROGN":
+                    var result = LispValue.null
+                    for m in primaries {
+                        result = try invokeMethod(m, callArgs, next: nil)
+                    }
+                    return result
+                default:
+                    var results: [LispValue] = []
+                    for m in primaries {
+                        results.append(
+                            try invokeMethod(m, callArgs, next: nil).firstValue)
+                    }
+                    let info = self.methodCombinations[ObjectIdentifier(combo)]
+                    if results.count == 1 && (info?.identity ?? true) {
+                        return results[0]
+                    }
+                    let opSymbol = info?.op ?? combo
+                    guard let opFn = opSymbol.function else {
+                        throw self.lispError("UNDEFINED-FUNCTION",
+                            "method combination operator \(opSymbol.name)")
+                    }
+                    return try self.applyFunction(opFn, results)
+                }
             }
-            let result = try primaryChain!(callArgs)
-            for a in aftersReversed {
-                _ = try invokeMethod(a, callArgs, next: nil)
+        } else {
+            // Standard combination: befores (most specific first), the
+            // primary chain, afters (least specific first).
+            var primaryChain: (([LispValue]) throws -> LispValue)? = nil
+            for m in primaries.reversed() {
+                let captured = primaryChain
+                primaryChain = { callArgs in
+                    try invokeMethod(m, callArgs, next: captured)
+                }
             }
-            return result
+            let aftersReversed = Array(afters.reversed())
+            core = { callArgs in
+                for b in befores {
+                    _ = try invokeMethod(b, callArgs, next: nil)
+                }
+                let result = try primaryChain!(callArgs)
+                for a in aftersReversed {
+                    _ = try invokeMethod(a, callArgs, next: nil)
+                }
+                return result
+            }
         }
 
         // Around methods wrap the core.

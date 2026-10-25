@@ -160,6 +160,47 @@ extension Interpreter {
             return LispValue.list(h.allPairs().map { $0.0 })
         }
 
+        defBuiltin("HASH-TABLE-VALUES", 1, 1) { [unowned self] args in
+            guard case .hashTable(let h) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "HASH-TABLE")
+            }
+            return LispValue.list(h.allPairs().map { $0.1 })
+        }
+
+        defBuiltin("%HASH-PAIRS", 1, 1) { [unowned self] args in
+            guard case .hashTable(let h) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "HASH-TABLE")
+            }
+            return LispValue.list(h.allPairs().map {
+                .cons(Cons(car: $0.0, cdr: $0.1))
+            })
+        }
+
+        defBuiltin("HASH-TABLE-TEST", 1, 1) { [unowned self] args in
+            guard case .hashTable(let h) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "HASH-TABLE")
+            }
+            let name: String
+            switch h.test {
+            case .eq: name = "EQ"
+            case .eql: name = "EQL"
+            case .equal: name = "EQUAL"
+            case .equalp: name = "EQUALP"
+            }
+            return .symbol(self.registry.lisp.intern(name))
+        }
+
+        defBuiltin("COPY-HASH-TABLE", 1, 1) { [unowned self] args in
+            guard case .hashTable(let h) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "HASH-TABLE")
+            }
+            let copy = LispHashTable(test: h.test)
+            for (k, v) in h.allPairs() {
+                copy.set(k, v)
+            }
+            return .hashTable(copy)
+        }
+
         // --- Vectors / arrays ---
 
         defBuiltin("VECTOR", 0, nil) { args in
