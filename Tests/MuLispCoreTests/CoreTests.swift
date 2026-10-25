@@ -288,10 +288,12 @@ final class MacroTests: XCTestCase {
               (dolist (x '(1 2 3) (reverse acc))
                 (push (* x x) acc)))
             """), "(1 4 9)")
+        // DO* steps sequentially: each sum step sees the already-incremented
+        // i (1+2+3+4+5 = 15). A parallel DO would give 10.
         XCTAssertEqual(ev(interp, """
             (do* ((i 0 (1+ i)) (sum 0 (+ sum i)))
                  ((> i 4) sum))
-            """), "10")
+            """), "15")
     }
 
     func testPlaceMacros() {
