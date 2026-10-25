@@ -143,7 +143,7 @@ extension Interpreter {
                     }
                     i = j + 2   // skip past ~}
                     let listVal = try take()
-                    var items = listVal.asArray() ?? []
+                    let items = listVal.asArray() ?? []
                     var iterIndex = 0
                     var stopped = false
                     while iterIndex < items.count && !stopped {

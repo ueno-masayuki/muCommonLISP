@@ -30,13 +30,16 @@ final class CLOSTests: XCTestCase {
     }
 
     func testInitforms() {
+        // NOTE: each test method gets a fresh interpreter, so every test
+        // must define the classes it uses itself.
         XCTAssertEqual(ev(interp, """
             (defclass counter ()
               ((n :initform 100 :accessor counter-n)))
             (counter-n (make-instance 'counter))
             """), "100")
         XCTAssertEqual(ev(interp, """
-            (slot-boundp (make-instance 'point) 'x)
+            (defclass has-init () ((x :initform 0)))
+            (slot-boundp (make-instance 'has-init) 'x)
             """), "T")
         XCTAssertEqual(ev(interp, """
             (defclass empty-slots () ((u)))

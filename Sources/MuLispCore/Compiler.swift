@@ -201,6 +201,16 @@ public final class Compiler {
         return Symbol(name: "\(prefix)-\(gensymCounter)", package: nil)
     }
 
+    /// Block names are symbols, but the reader turns the token NIL into the
+    /// empty list — accept it and use the NIL symbol (for BLOCK NIL loops).
+    private func blockNameSymbol(_ v: LispValue) -> Symbol? {
+        switch v {
+        case .symbol(let s): return s
+        case .null: return lisp.intern("NIL")
+        default: return nil
+        }
+    }
+
     // MARK: - Main compile dispatch
 
     private func compile(_ form: LispValue, _ ctx: Ctx, tail: Bool) throws {
@@ -567,7 +577,7 @@ public final class Compiler {
 
         case "BLOCK":
             let a = try args(1)
-            guard case .symbol(let blockName) = a[0] else {
+            guard let blockName = blockNameSymbol(a[0]) else {
                 throw CompileError("block name must be a symbol")
             }
             try compileBlock(blockName, Array(a.dropFirst()), ctx, tail: tail)
@@ -575,7 +585,7 @@ public final class Compiler {
 
         case "RETURN-FROM":
             let a = try args(1, 2)
-            guard case .symbol(let blockName) = a[0] else {
+            guard let blockName = blockNameSymbol(a[0]) else {
                 throw CompileError("block name must be a symbol")
             }
             guard let (depth, slot) = resolveBlock(blockName, ctx.scope) else {
@@ -917,7 +927,7 @@ public final class Compiler {
                                        body: Array(a.dropFirst(2)),
                                        blockName: macro ? nil : blockName,
                                        outer: ctx)
-        try emitCoreCall(ctx, macro ? "%SET-MACRO" : "%SET-FUNCTION") {
+        emitCoreCall(ctx, macro ? "%SET-MACRO" : "%SET-FUNCTION") {
             emitConstant(ctx, nameDesignator)
             ctx.code.children.append(code)
             ctx.code.emit(.makeClosure(ctx.code.children.count - 1))
@@ -938,7 +948,7 @@ public final class Compiler {
                     return 2
                 }
             } else {
-                try emitCoreCall(ctx, "%DEFVAR") {
+                emitCoreCall(ctx, "%DEFVAR") {
                     emitConstant(ctx, .symbol(s))
                     return 1
                 }
@@ -1093,7 +1103,7 @@ public final class Compiler {
             return
         }
         let tokenSlot = ctx.scope.allocSlot()
-        try emitCoreCall(ctx, "%MAKE-BLOCK-TOKEN") {
+        emitCoreCall(ctx, "%MAKE-BLOCK-TOKEN") {
             emitConstant(ctx, .string(name.name))
             return 1
         }

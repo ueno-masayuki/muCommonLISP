@@ -418,7 +418,8 @@ final class FormatTests: XCTestCase {
         XCTAssertEqual(ev(interp, "(format nil \"~S\" \"x\")"), "\"\\\"x\\\"\"")
         XCTAssertEqual(ev(interp, "(format nil \"~D + ~D\" 1 2)"), "\"1 + 2\"")
         XCTAssertEqual(ev(interp, "(format nil \"~,2F\" 3.14159)"), "\"3.14\"")
-        XCTAssertEqual(ev(interp, "(format nil \"a~%b\")"), "\"a\\nb\"")
+        // ~% emits a real newline; PRIN1 does not escape newlines in strings.
+        XCTAssertEqual(ev(interp, "(format nil \"a~%b\")"), "\"a\nb\"")
         XCTAssertEqual(ev(interp, "(format nil \"~~\")"), "\"~\"")
         XCTAssertEqual(ev(interp, "(format nil \"~X\" 255)"), "\"FF\"")
     }
