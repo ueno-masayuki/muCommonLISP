@@ -142,6 +142,9 @@ public final class Reader {
         return try readForm()
     }
 
+    /// Current character offset into the source (for stream-backed READ).
+    public var position: Int { return pos }
+
     public func readCharRaw() -> Character? {
         return next()
     }

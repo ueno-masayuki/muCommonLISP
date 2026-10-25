@@ -38,20 +38,23 @@ enum Prelude {
   (let ((v (gensym "V")))
     `(progn ,a (let ((,v ,b)) ,@body ,v))))
 
-(defmacro push (item place)
-  `(setf ,place (cons ,item ,place)))
+;;; NOTE: push/pop/incf/decf/pushnew/rotatef/shiftf/remf are implemented as
+;;; built-in macros with single evaluation of place subforms.
 
-(defmacro pop (place)
-  (let ((v (gensym "V")))
-    `(let ((,v (car ,place)))
-       (setf ,place (cdr ,place))
-       ,v)))
-
-(defmacro incf (place &rest delta)
-  `(setf ,place (+ ,place ,(if delta (car delta) 1))))
-
-(defmacro decf (place &rest delta)
-  `(setf ,place (- ,place ,(if delta (car delta) 1))))
+(defmacro psetq (&rest pairs)
+  (let ((temps nil)
+        (sets nil)
+        (rest pairs))
+    (%while (consp rest)
+      (let ((var (car rest))
+            (val (cadr rest))
+            (tmp (gensym "PSETQ")))
+        (push (list tmp val) temps)
+        (push (list 'setq var tmp) sets)
+        (setq rest (cddr rest))))
+    `(let ,(reverse temps)
+       ,@(reverse sets)
+       nil)))
 
 (defmacro dolist (spec &rest body)
   (let ((lst (gensym "LIST")))
@@ -91,9 +94,44 @@ enum Prelude {
                    bindings))
        (progn ,@(cdr end-clause)))))
 
-;; NOTE: DO uses sequential (DO*) stepping semantics in muCommonLISP.
+;; DO steps its variables in parallel (via PSETQ).
 (defmacro do (bindings end-clause &rest body)
-  `(do* ,bindings ,end-clause ,@body))
+  `(block nil
+     (let ,(mapcar (lambda (b)
+                     (if (consp b)
+                         (list (car b) (cadr b))
+                         (list b nil)))
+                   bindings)
+       (%while (not ,(car end-clause))
+         ,@body
+         (psetq ,@(mapcan (lambda (b)
+                            (if (and (consp b) (cddr b))
+                                (list (car b) (caddr b))
+                                nil))
+                          bindings)))
+       (progn ,@(cdr end-clause)))))
+
+(defmacro prog (bindings &rest body)
+  `(block nil (let ,bindings (tagbody ,@body))))
+
+(defmacro prog* (bindings &rest body)
+  `(block nil (let* ,bindings (tagbody ,@body))))
+
+(defmacro nth-value (n form)
+  `(nth ,n (multiple-value-list ,form)))
+
+(defmacro multiple-value-list (form)
+  `(multiple-value-call #'list ,form))
+
+(defmacro multiple-value-setq (vars form)
+  (let ((temps (mapcar (lambda (v) (gensym "MV")) vars)))
+    `(multiple-value-bind ,temps ,form
+       ,@(mapcar (lambda (v tmp) `(setq ,v ,tmp)) vars temps)
+       ,(if temps (car temps) nil))))
+
+(defmacro with-simple-restart (spec &rest body)
+  `(restart-case (progn ,@body)
+     (,(car spec) () (values nil t))))
 
 (defmacro case (keyform &rest clauses)
   (let ((key (gensym "KEY")))
@@ -198,6 +236,27 @@ enum Prelude {
   `(let ((,(car spec) (make-string-output-stream)))
      ,@body
      (get-output-stream-string ,(car spec))))
+
+(defmacro with-open-file (spec &rest body)
+  (let ((var (car spec)))
+    `(let ((,var (open ,(cadr spec) ,@(cddr spec))))
+       (unwind-protect (progn ,@body)
+         (when ,var (close ,var))))))
+
+(defmacro with-input-from-string (spec &rest body)
+  `(let ((,(car spec) (make-string-input-stream ,(cadr spec))))
+     ,@body))
+
+(defmacro with-standard-io-syntax (&rest body)
+  `(progn ,@body))
+
+(defmacro do-symbols (spec &rest body)
+  `(dolist (,(car spec) (%package-symbols ,(if (cdr spec) (cadr spec) '*package*)))
+     ,@body))
+
+(defmacro do-external-symbols (spec &rest body)
+  `(dolist (,(car spec) (%package-external-symbols ,(if (cdr spec) (cadr spec) '*package*)))
+     ,@body))
 
 ;;; ---------------- LOOP (subset) ----------------
 

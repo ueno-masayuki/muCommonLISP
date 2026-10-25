@@ -27,6 +27,15 @@ public final class Interpreter {
     /// User reader macros installed with SET-MACRO-CHARACTER.
     var readtableMacros: [Character: LispFunction] = [:]
 
+    /// Active HANDLER-BIND handlers (innermost last).
+    var handlerStack: [HandlerEntry] = []
+    /// Active restarts (innermost last).
+    var restartStack: [RestartEntry] = []
+
+    /// TRACE bookkeeping: traced symbol -> original function.
+    var tracedFunctions: [ObjectIdentifier: LispFunction] = [:]
+    var traceDepth = 0
+
     public var gensymCounter = 0
     public let graphics = GraphicsContext2D()
 
@@ -35,6 +44,7 @@ public final class Interpreter {
 
     public private(set) var tValue: LispValue = .null
     private var packageSymbol: Symbol!
+    var standardOutputSymbol: Symbol!
 
     /// Non-nil when the bootstrap (prelude) failed; the interpreter still
     /// works for debugging purposes.
@@ -65,6 +75,7 @@ public final class Interpreter {
         "BLOCK", "RETURN-FROM", "CATCH", "THROW", "UNWIND-PROTECT",
         "MULTIPLE-VALUE-BIND", "FLET", "LABELS", "SYMBOL-MACROLET",
         "THE", "DECLARE", "TAGBODY", "GO", "MACROLET", "PROGV",
+        "MULTIPLE-VALUE-CALL", "MULTIPLE-VALUE-PROG1", "DEFINE-SYMBOL-MACRO",
         "NIL", "T", "OTHERWISE",
     ]
 
@@ -102,14 +113,25 @@ public final class Interpreter {
         registerCLOS()
         registerStructs()
         registerGraphicsBuiltins()
+        registerControlFlowBuiltins()
+        registerPlaceMacros()
+        registerStreamBuiltins()
+        registerIntrospection()
 
-        // Standard output stream object (for explicit stream arguments).
+        // Standard output stream object (for explicit stream arguments and
+        // *STANDARD-OUTPUT* rebinding).
         let stdout = LispStream(kind: .standardOutput) { [weak self] s in
             self?.write(s)
         }
         let stdoutSym = registry.lisp.intern("*STANDARD-OUTPUT*")
         stdoutSym.isSpecial = true
         stdoutSym.value = .stream(stdout)
+        standardOutputSymbol = stdoutSym
+        for alias in ["*ERROR-OUTPUT*", "*TRACE-OUTPUT*", "*DEBUG-IO*"] {
+            let sym = registry.lisp.intern(alias)
+            sym.isSpecial = true
+            sym.value = .stream(stdout)
+        }
 
         // Load the Lisp-level prelude (macros, LOOP, ...).
         do {

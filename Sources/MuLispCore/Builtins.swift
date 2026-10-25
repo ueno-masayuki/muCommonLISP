@@ -10,9 +10,12 @@ extension Interpreter {
 
         // --- Definition support used by the compiler ---
 
-        defBuiltin("%SET-FUNCTION", 2, 2) { [unowned self] args in
+        defBuiltin("%SET-FUNCTION", 2, 3) { [unowned self] args in
             guard let fn = args[1].asFunction else {
                 throw self.typeError(args[1], expected: "FUNCTION")
+            }
+            if args.count == 3, case .string(let doc) = args[2].firstValue {
+                fn.documentation = doc.string
             }
             switch args[0].firstValue {
             case .symbol(let s):
@@ -38,7 +41,7 @@ extension Interpreter {
             }
         }
 
-        defBuiltin("%SET-MACRO", 2, 2) { [unowned self] args in
+        defBuiltin("%SET-MACRO", 2, 3) { [unowned self] args in
             guard case .symbol(let s) = args[0].firstValue,
                   let fn = args[1].asFunction else {
                 throw self.lispError("ERROR", "invalid defmacro")
@@ -65,6 +68,15 @@ extension Interpreter {
             }
             s.isSpecial = true
             s.value = args[1].firstValue
+            return .symbol(s)
+        }
+
+        defBuiltin("%DEFINE-SYMBOL-MACRO", 2, 2) { [unowned self] args in
+            guard case .symbol(let s) = args[0].firstValue else {
+                throw self.lispError("ERROR",
+                    "define-symbol-macro name must be a symbol")
+            }
+            s.globalSymbolMacro = args[1].firstValue
             return .symbol(s)
         }
 
@@ -311,16 +323,38 @@ extension Interpreter {
         // --- Conditions ---
 
         defBuiltin("ERROR", 1, nil) { [unowned self] args in
-            throw try self.signalToError(args, defaultClass: "SIMPLE-ERROR")
+            let e = try self.signalToError(args, defaultClass: "SIMPLE-ERROR")
+            // Give HANDLER-BIND handlers a chance before unwinding; they can
+            // decline (return) or transfer control (throw).
+            try self.runHandlers(for: e.condition)
+            throw e
         }
 
         defBuiltin("SIGNAL", 1, nil) { [unowned self] args in
-            throw try self.signalToError(args, defaultClass: "SIMPLE-CONDITION")
+            let e = try self.signalToError(args,
+                                           defaultClass: "SIMPLE-CONDITION")
+            try self.runHandlers(for: e.condition)
+            // SIGNAL returns NIL when the condition is not handled... but a
+            // serious condition signalled through SIGNAL still unwinds via
+            // HANDLER-CASE, which catches thrown LispErrors; approximate the
+            // standard by returning NIL here.
+            return .null
         }
 
         defBuiltin("WARN", 1, nil) { [unowned self] args in
             let e = try self.signalToError(args, defaultClass: "SIMPLE-WARNING")
-            self.write(";; WARNING: \(e.message)\n")
+            // Establish a MUFFLE-WARNING restart around the signal.
+            let token = BlockToken(name: "WARN")
+            let sym = self.registry.lisp.intern("MUFFLE-WARNING")
+            self.restartStack.append(RestartEntry(
+                name: sym, token: token, clauseIndex: 0, report: nil))
+            defer { self.restartStack.removeLast() }
+            do {
+                try self.runHandlers(for: e.condition)
+                self.write(";; WARNING: \(e.message)\n")
+            } catch let r as RestartInvokeSignal where r.token === token {
+                // muffled
+            }
             return .null
         }
 

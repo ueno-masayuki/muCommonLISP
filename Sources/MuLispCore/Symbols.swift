@@ -15,6 +15,8 @@ public final class Symbol: Hashable {
     /// Function used by (setf (name ...) v); called as (fn newValue args...).
     public var setfFunction: LispFunction?
     public var plist: LispValue = .null
+    /// Expansion installed by DEFINE-SYMBOL-MACRO (nil = none).
+    public var globalSymbolMacro: LispValue?
     /// Declared special (dynamically bound by LET)?
     public var isSpecial: Bool = false
     /// Constant (keywords, T, PI, ...); SETQ is an error.

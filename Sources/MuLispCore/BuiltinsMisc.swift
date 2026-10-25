@@ -531,24 +531,27 @@ extension Interpreter {
         }
     }
 
-    /// Resolve an output-stream designator and write to it.
+    /// Resolve an output-stream designator and write to it. T and NIL follow
+    /// the current binding of *STANDARD-OUTPUT*.
     func writeTo(_ designator: LispValue, _ text: String) throws {
         switch designator.firstValue {
         case .null:
-            // NIL means "standard output" for these builtins (we do not model
-            // *standard-output* rebinding).
-            write(text)
+            writeToStandardOutput(text)
         case .symbol(let s) where s.name == "T":
-            write(text)
+            writeToStandardOutput(text)
         case .stream(let stream):
             stream.write(text)
         default:
-            if case .symbol(let s) = designator.firstValue,
-               s.package === registry.lisp, s.name == "T" {
-                write(text)
-            } else {
-                throw typeError(designator, expected: "STREAM")
-            }
+            throw typeError(designator, expected: "STREAM")
+        }
+    }
+
+    func writeToStandardOutput(_ text: String) {
+        if let sym = standardOutputSymbol,
+           case .stream(let s)? = sym.value {
+            s.write(text)
+        } else {
+            write(text)
         }
     }
 }

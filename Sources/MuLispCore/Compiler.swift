@@ -9,6 +9,10 @@ private final class Level {
     var symbolMacros: [Symbol: LispValue] = [:]
     var funcs: [Symbol: Int] = [:]
     var blocks: [Symbol: Int] = [:]
+    var macros: [Symbol: LispFunction] = [:]
+    /// TAGBODY tags: tag -> (token slot, segment index).
+    var tags: [Symbol: (slot: Int, index: Int)] = [:]
+    var intTags: [Int: (slot: Int, index: Int)] = [:]
 }
 
 /// Compile-time model of one function (one runtime Frame).
@@ -133,6 +137,44 @@ public final class Compiler {
         return nil
     }
 
+    private func resolveLocalMacro(_ s: Symbol, _ scope: FunctionScope) -> LispFunction? {
+        var sc: FunctionScope? = scope
+        while let cur = sc {
+            for level in cur.levels.reversed() {
+                if level.funcs[s] != nil { return nil }   // flet shadows macrolet
+                if let m = level.macros[s] { return m }
+            }
+            sc = cur.parent
+        }
+        return nil
+    }
+
+    /// Resolve a TAGBODY tag (symbol or integer form).
+    private func resolveTag(_ tag: LispValue, _ scope: FunctionScope)
+        -> (depth: Int, slot: Int, index: Int)? {
+        var depth = 0
+        var sc: FunctionScope? = scope
+        while let cur = sc {
+            for level in cur.levels.reversed() {
+                switch tag {
+                case .symbol(let s):
+                    if let hit = level.tags[s] {
+                        return (depth, hit.slot, hit.index)
+                    }
+                case .int(let i):
+                    if let hit = level.intTags[i] {
+                        return (depth, hit.slot, hit.index)
+                    }
+                default:
+                    return nil
+                }
+            }
+            depth += 1
+            sc = cur.parent
+        }
+        return nil
+    }
+
     // MARK: - Helpers
 
     private func emitConstant(_ ctx: Ctx, _ v: LispValue) {
@@ -238,7 +280,9 @@ public final class Compiler {
         case .symbolMacro(let expansion):
             try compile(expansion, ctx, tail: false)
         case .none:
-            if s.isConstant, let v = s.value {
+            if let expansion = s.globalSymbolMacro {
+                try compile(expansion, ctx, tail: false)
+            } else if s.isConstant, let v = s.value {
                 emitConstant(ctx, v)
             } else {
                 ctx.code.emit(.globalGet(s))
@@ -283,6 +327,16 @@ public final class Compiler {
             ctx.code.emit(.localGet(depth, slot))
             for a in args { try compile(a, ctx, tail: false) }
             ctx.code.emit(tail ? .tailCall(args.count) : .call(args.count))
+            return
+        }
+
+        // Local macros (MACROLET) shadow global definitions.
+        if let localMacro = resolveLocalMacro(head, ctx.scope) {
+            guard let args = argForms else {
+                throw CompileError("malformed macro call to \(head.name)")
+            }
+            let expansion = try interp.applyFunction(localMacro, args)
+            try compile(expansion, ctx, tail: tail)
             return
         }
 
@@ -704,12 +758,156 @@ public final class Compiler {
             ctx.code.emit(.pushNil)
             return true
 
-        case "TAGBODY", "GO", "MACROLET", "PROGV":
-            throw CompileError("\(name) is not supported by muCommonLISP")
+        case "TAGBODY":
+            try compileTagbody(try args(0), ctx)
+            return true
+
+        case "GO":
+            let a = try args(1, 1)
+            guard let (depth, slot, index) = resolveTag(a[0], ctx.scope) else {
+                throw CompileError("no visible tag for GO: "
+                    + Printer.toString(a[0], escape: true))
+            }
+            try emitCoreCall(ctx, "%GO") {
+                ctx.code.emit(.localGet(depth, slot))
+                emitConstant(ctx, .int(index))
+                return 2
+            }
+            return true
+
+        case "MACROLET":
+            let a = try args(1)
+            guard let defs = a[0].asArray() else {
+                throw CompileError("malformed macrolet")
+            }
+            ctx.scope.pushLevel()
+            for d in defs {
+                guard let parts = d.asArray(), parts.count >= 2,
+                      case .symbol(let mname) = parts[0] else {
+                    throw CompileError("malformed macrolet definition")
+                }
+                let lambdaForm = LispValue.list(
+                    [.symbol(lisp.intern("LAMBDA")), parts[1]]
+                    + parts.dropFirst(2))
+                let code = try compileLambdaExpression(lambdaForm)
+                ctx.scope.top.macros[mname] = Closure(code: code,
+                                                      capturedFrame: nil)
+            }
+            try compileBody(stripDeclarations(Array(a.dropFirst())), ctx,
+                            tail: tail)
+            ctx.scope.popLevel()
+            return true
+
+        case "PROGV":
+            let a = try args(2)
+            try emitCoreCall(ctx, "%PROGV") {
+                try compile(a[0], ctx, tail: false)
+                try compile(a[1], ctx, tail: false)
+                try emitThunk(Array(a.dropFirst(2)), ctx, name: "PROGV-BODY")
+                return 3
+            }
+            return true
+
+        case "MULTIPLE-VALUE-CALL":
+            let a = try args(1)
+            try emitCoreCall(ctx, "%MVCALL") {
+                try compile(a[0], ctx, tail: false)
+                for form in a.dropFirst() {
+                    try emitThunk([form], ctx, name: "MVCALL-ARG")
+                }
+                return a.count
+            }
+            return true
+
+        case "MULTIPLE-VALUE-PROG1":
+            let a = try args(1)
+            try emitCoreCall(ctx, "%MVPROG1") {
+                try emitThunk([a[0]], ctx, name: "MVPROG1-FIRST")
+                try emitThunk(Array(a.dropFirst()), ctx, name: "MVPROG1-REST")
+                return 2
+            }
+            return true
+
+        case "DEFINE-SYMBOL-MACRO":
+            let a = try args(2, 2)
+            guard case .symbol = a[0] else {
+                throw CompileError("define-symbol-macro name must be a symbol")
+            }
+            try emitCoreCall(ctx, "%DEFINE-SYMBOL-MACRO") {
+                emitConstant(ctx, a[0])
+                emitConstant(ctx, a[1])
+                return 2
+            }
+            // Also record it immediately for later forms in this unit.
+            if case .symbol(let s) = a[0] {
+                s.globalSymbolMacro = a[1]
+            }
+            return true
 
         default:
             return false
         }
+    }
+
+    // MARK: - TAGBODY
+
+    private func compileTagbody(_ body: [LispValue], _ ctx: Ctx) throws {
+        // Fast path: no tags at all -> plain body.
+        let hasTags = body.contains {
+            if case .symbol = $0 { return true }
+            if case .int = $0 { return true }
+            return false
+        }
+        if !hasTags {
+            for form in body {
+                try compile(form, ctx, tail: false)
+                ctx.code.emit(.pop)
+            }
+            ctx.code.emit(.pushNil)
+            return
+        }
+
+        // Split into segments at tags.
+        var segments: [[LispValue]] = [[]]
+        var tagIndex: [(LispValue, Int)] = []
+        for item in body {
+            switch item {
+            case .symbol, .int:
+                segments.append([])
+                tagIndex.append((item, segments.count - 1))
+            default:
+                segments[segments.count - 1].append(item)
+            }
+        }
+
+        let tokenSlot = ctx.scope.allocSlot()
+        emitCoreCall(ctx, "%MAKE-BLOCK-TOKEN") {
+            emitConstant(ctx, .str("TAGBODY"))
+            return 1
+        }
+        ctx.code.emit(.localSet(0, tokenSlot))
+
+        ctx.scope.pushLevel()
+        for (tag, idx) in tagIndex {
+            switch tag {
+            case .symbol(let s):
+                ctx.scope.top.tags[s] = (slot: tokenSlot, index: idx)
+            case .int(let i):
+                ctx.scope.top.intTags[i] = (slot: tokenSlot, index: idx)
+            default:
+                break
+            }
+        }
+
+        try emitCoreCall(ctx, "%TAGBODY") {
+            ctx.code.emit(.localGet(0, tokenSlot))
+            for segment in segments {
+                try emitThunk(segment, ctx, name: "TAGBODY-SEGMENT")
+            }
+            ctx.code.emit(.makeList(segments.count))
+            return 2
+        }
+        ctx.scope.popLevel()
     }
 
     // MARK: - Bodies and thunks
@@ -922,15 +1120,24 @@ public final class Compiler {
             throw CompileError("invalid defun name")
         }
 
+        let body = Array(a.dropFirst(2))
+        var docstring: String? = nil
+        if body.count > 1, case .string(let doc) = body[0] {
+            docstring = doc.string
+        }
         let code = try buildLambdaCode(name: fname,
                                        lambdaList: a[1],
-                                       body: Array(a.dropFirst(2)),
+                                       body: body,
                                        blockName: macro ? nil : blockName,
                                        outer: ctx)
         emitCoreCall(ctx, macro ? "%SET-MACRO" : "%SET-FUNCTION") {
             emitConstant(ctx, nameDesignator)
             ctx.code.children.append(code)
             ctx.code.emit(.makeClosure(ctx.code.children.count - 1))
+            if let doc = docstring {
+                emitConstant(ctx, .str(doc))
+                return 3
+            }
             return 2
         }
     }
@@ -1037,12 +1244,16 @@ public final class Compiler {
             case .symbolMacro(let expansion):
                 try compileSetfPair(place: expansion, valueForm: valueForm, ctx)
             case .none:
-                if s.isConstant {
+                if let expansion = s.globalSymbolMacro {
+                    try compileSetfPair(place: expansion,
+                                        valueForm: valueForm, ctx)
+                } else if s.isConstant {
                     throw CompileError("cannot setq constant \(s.name)")
+                } else {
+                    try compile(valueForm, ctx, tail: false)
+                    ctx.code.emit(.dup)
+                    ctx.code.emit(.globalSet(s))
                 }
-                try compile(valueForm, ctx, tail: false)
-                ctx.code.emit(.dup)
-                ctx.code.emit(.globalSet(s))
             }
             if !isLast {
                 ctx.code.emit(.pop)
@@ -1079,6 +1290,30 @@ public final class Compiler {
                 throw CompileError("invalid setf place")
             }
             let placeArgs = c.cdr.asArray() ?? []
+
+            // (setf (getf inner-place indicator) v): write the updated plist
+            // back into the inner place.
+            if op.name == "GETF", isCLSymbol(op), placeArgs.count >= 2 {
+                gensymCounter += 1
+                let it = LispValue.symbol(Symbol(name: "GETF-I\(gensymCounter)",
+                                                 package: nil))
+                let vt = LispValue.symbol(Symbol(name: "GETF-V\(gensymCounter)",
+                                                 package: nil))
+                let inner = placeArgs[0]
+                let lispPkg = interp.registry.lisp
+                let expansion = LispValue.list([
+                    .symbol(lispPkg.intern("LET")),
+                    LispValue.list([LispValue.list([it, placeArgs[1]]),
+                                    LispValue.list([vt, valueForm])]),
+                    LispValue.list([.symbol(lispPkg.intern("SETF")), inner,
+                                    LispValue.list([.symbol(lispPkg.intern("%PLIST-PUT")),
+                                                    inner, it, vt])]),
+                    vt,
+                ])
+                try compile(expansion, ctx, tail: false)
+                return
+            }
+
             // Note: the new value is evaluated before the place subforms
             // (a documented deviation from strict left-to-right order).
             try emitCoreCall(ctx, "%SETF-CALL") {
