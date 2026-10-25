@@ -49,7 +49,26 @@ public final class Interpreter {
 
     // MARK: - Init
 
+    /// Names the compiler recognizes as special forms. They must live in the
+    /// COMMON-LISP package, so they are interned up front — user code must
+    /// not be the first to intern them (that would put them in CL-USER and
+    /// the compiler would no longer recognize them).
+    private static let specialFormNames = [
+        "QUOTE", "QUASIQUOTE", "UNQUOTE", "UNQUOTE-SPLICING",
+        "IF", "PROGN", "LOCALLY", "EVAL-WHEN",
+        "LET", "LET*", "LAMBDA", "FUNCTION", "SETQ", "SETF",
+        "DEFUN", "DEFMACRO", "DEFVAR", "DEFPARAMETER", "DEFCONSTANT",
+        "AND", "OR", "%WHILE",
+        "BLOCK", "RETURN-FROM", "CATCH", "THROW", "UNWIND-PROTECT",
+        "MULTIPLE-VALUE-BIND", "FLET", "LABELS", "SYMBOL-MACROLET",
+        "THE", "DECLARE", "TAGBODY", "GO", "MACROLET", "PROGV",
+        "NIL", "T", "OTHERWISE",
+    ]
+
     public init() {
+        for name in Interpreter.specialFormNames {
+            _ = registry.lisp.intern(name)
+        }
         let tSym = registry.lisp.intern("T")
         tSym.value = .symbol(tSym)
         tSym.isConstant = true

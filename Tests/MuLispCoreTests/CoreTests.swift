@@ -46,6 +46,34 @@ final class ReaderTests: XCTestCase {
         XCTAssertEqual(ev(interp, "; comment\n 42"), "42")
         XCTAssertEqual(ev(interp, "#| block #| nested |# comment |# 7"), "7")
     }
+
+    func testNumberLikeSymbols() {
+        // 1+ and 1- are symbols (standard functions), not numbers.
+        XCTAssertEqual(ev(interp, "(1+ 5)"), "6")
+        XCTAssertEqual(ev(interp, "(1- 5)"), "4")
+        XCTAssertEqual(ev(interp, "(symbol-name '1+)"), "\"1+\"")
+        XCTAssertEqual(ev(interp, "(funcall #'1+ 41)"), "42")
+        XCTAssertEqual(ev(interp, "'1d0"), "1D0")
+        XCTAssertEqual(ev(interp, "123."), "123")
+        XCTAssertEqual(ev(interp, ".5"), "0.5")
+        XCTAssertEqual(ev(interp, "1.5e2"), "150.0")
+    }
+
+    func testSpecialFormsRecognizedFromUserPackage() {
+        // These names never appear in the prelude source, so they must have
+        // been interned into COMMON-LISP at bootstrap; otherwise the reader
+        // would intern them into CL-USER and the compiler would not treat
+        // them as special forms.
+        XCTAssertEqual(ev(interp, "(catch 'tag-x (throw 'tag-x 9))"), "9")
+        XCTAssertEqual(ev(interp, "(defvar *fresh-defvar-test* 3) *fresh-defvar-test*"), "3")
+        XCTAssertEqual(ev(interp, "(defparameter *fresh-defparameter* 4)"),
+                       "*FRESH-DEFPARAMETER*")
+        XCTAssertEqual(ev(interp,
+            "(multiple-value-bind (a b) (values 1 2) (+ a b))"), "3")
+        XCTAssertEqual(ev(interp, "(flet ((fx () 1)) (fx))"), "1")
+        XCTAssertEqual(ev(interp, "(the integer 5)"), "5")
+        XCTAssertEqual(ev(interp, "(locally 8)"), "8")
+    }
 }
 
 final class EvalTests: XCTestCase {

@@ -306,43 +306,111 @@ public final class Reader {
         return (parts, hadEscape)
     }
 
-    private func looksLikeNumber(_ s: String) -> Bool {
-        if s.isEmpty { return false }
-        var body = Substring(s)
-        if body.first == "+" || body.first == "-" {
-            body = body.dropFirst()
-        }
-        if body.isEmpty { return false }
-        guard let f = body.first, f.isNumber || (f == "." && body.count > 1) else {
-            return false
-        }
-        return body.allSatisfy { $0.isNumber || $0 == "." || $0 == "e" || $0 == "E"
-            || $0 == "+" || $0 == "-" || $0 == "/" }
+    private enum NumberClass {
+        case integer   // 123, -7, 123.
+        case float     // 1.5, .5, 1e5, 1.5e-3
+        case ratio     // 1/2 (unsupported, but recognized to give a clear error)
+        case notANumber
     }
 
-    private func parseNumber(_ s: String) throws -> LispValue {
-        if s.contains("/") {
-            throw ReaderError("ratios are not supported: \(s)")
+    /// Strict Common Lisp number-token recognition. Tokens like 1+ and 1-
+    /// are NOT numbers; they fall through and become symbols.
+    private func classifyNumber(_ s: String) -> NumberClass {
+        let arr = Array(s)
+        var i = 0
+        func isDigit(_ c: Character) -> Bool { return c.isASCII && c.isNumber }
+
+        if i < arr.count, arr[i] == "+" || arr[i] == "-" {
+            i += 1
         }
-        if let i = Int(s) {
-            return .int(i)
+        var intDigits = 0
+        while i < arr.count, isDigit(arr[i]) {
+            i += 1
+            intDigits += 1
         }
-        // "123." style integers
-        if s.hasSuffix("."), let i = Int(String(s.dropLast())) {
-            return .int(i)
+
+        // Ratio: digits/digits
+        if i < arr.count, arr[i] == "/" {
+            i += 1
+            var denomDigits = 0
+            while i < arr.count, isDigit(arr[i]) {
+                i += 1
+                denomDigits += 1
+            }
+            if intDigits > 0 && denomDigits > 0 && i == arr.count {
+                return .ratio
+            }
+            return .notANumber
         }
-        if let d = Double(s) {
-            return .double(d)
+
+        var isFloat = false
+        if i < arr.count, arr[i] == "." {
+            i += 1
+            var fracDigits = 0
+            while i < arr.count, isDigit(arr[i]) {
+                i += 1
+                fracDigits += 1
+            }
+            if fracDigits > 0 {
+                isFloat = true
+            } else {
+                // "123." is an integer; anything else with a bare dot is not
+                // a number.
+                if intDigits > 0 && i == arr.count {
+                    return .integer
+                }
+                return .notANumber
+            }
         }
-        throw ReaderError("invalid number syntax: \(s)")
+
+        if intDigits == 0 && !isFloat {
+            return .notANumber
+        }
+
+        if i < arr.count, arr[i] == "e" || arr[i] == "E" {
+            i += 1
+            if i < arr.count, arr[i] == "+" || arr[i] == "-" {
+                i += 1
+            }
+            var expDigits = 0
+            while i < arr.count, isDigit(arr[i]) {
+                i += 1
+                expDigits += 1
+            }
+            if expDigits == 0 { return .notANumber }
+            isFloat = true
+        }
+
+        guard i == arr.count else { return .notANumber }
+        return isFloat ? .float : .integer
     }
 
     private func readAtom() throws -> LispValue {
         let (parts, hadEscape) = try readTokenDetailed()
         let raw = String(parts.map { $0.0 })
 
-        if !hadEscape && looksLikeNumber(raw) {
-            return try parseNumber(raw)
+        if !hadEscape {
+            switch classifyNumber(raw) {
+            case .integer:
+                var t = raw
+                if t.hasSuffix(".") { t = String(t.dropLast()) }
+                if let i = Int(t) {
+                    return .int(i)
+                }
+                if let d = Double(t) {
+                    return .double(d)   // integer too large for Int
+                }
+                throw ReaderError("invalid number syntax: \(raw)")
+            case .float:
+                if let d = Double(raw) {
+                    return .double(d)
+                }
+                throw ReaderError("invalid number syntax: \(raw)")
+            case .ratio:
+                throw ReaderError("ratios are not supported: \(raw)")
+            case .notANumber:
+                break
+            }
         }
 
         // Normalize case: unescaped characters are upcased.
