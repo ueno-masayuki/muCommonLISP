@@ -12,7 +12,8 @@ struct CanvasView: View {
     var body: some View {
         GeometryReader { geo in
             Canvas { context, size in
-                render(model.drawCommands, context: &context, size: size)
+                CanvasRenderer.render(model.drawCommands,
+                                      context: &context, size: size)
             }
             .background(Color(nsColor: .textBackgroundColor))
             .onAppear {
@@ -25,9 +26,11 @@ struct CanvasView: View {
             }
         }
     }
+}
 
-    private func render(_ commands: [DrawCommand],
-                        context: inout GraphicsContext, size: CGSize) {
+enum CanvasRenderer {
+    static func render(_ commands: [DrawCommand],
+                       context: inout GraphicsContext, size: CGSize) {
         var color = Color.black
         var lineWidth = 1.0
 

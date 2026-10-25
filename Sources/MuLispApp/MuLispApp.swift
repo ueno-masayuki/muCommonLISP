@@ -11,6 +11,7 @@ import AppKit
 @main
 struct MuLispApp: App {
     @StateObject private var model = InterpreterModel()
+    @StateObject private var editor = EditorState()
 
     init() {
         // Allow running via `swift run muCommonLISP` (no app bundle):
@@ -25,7 +26,8 @@ struct MuLispApp: App {
         WindowGroup("muCommonLISP") {
             ContentView()
                 .environmentObject(model)
-                .frame(minWidth: 900, minHeight: 560)
+                .environmentObject(editor)
+                .frame(minWidth: 980, minHeight: 620)
         }
         .commands {
             CommandGroup(replacing: .newItem) {}

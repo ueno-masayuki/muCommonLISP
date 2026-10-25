@@ -67,9 +67,7 @@ func repl() {
         pending += line
         // Try to read the accumulated input; keep reading lines while the
         // form is incomplete.
-        let probe = Reader(source: pending, registry: interp.registry) {
-            interp.currentPackage
-        }
+        let probe = interp.makeReader(source: pending)
         do {
             var forms: [LispValue] = []
             while let f = try probe.read() {

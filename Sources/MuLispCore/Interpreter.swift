@@ -42,6 +42,12 @@ public final class Interpreter {
     public var gensymCounter = 0
     public let graphics = GraphicsContext2D()
 
+    /// Graphics windows created from Lisp (MAKE-GRAPHICS-WINDOW).
+    public var graphicsWindows: [GraphicsWindow] = []
+    /// GUI hooks: called when Lisp opens / closes a graphics window.
+    public var windowOpener: ((GraphicsWindow) -> Void)?
+    public var windowCloser: ((GraphicsWindow) -> Void)?
+
     /// Receives all textual output (PRINT, FORMAT T, ...). Defaults to stdout.
     public var outputHandler: ((String) -> Void)?
 

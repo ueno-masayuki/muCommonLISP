@@ -1,5 +1,6 @@
 // ContentView.swift
-// Main window: REPL pane on the left, graphics canvas on the right.
+// Main window: editor above the REPL on the left, graphics canvas on the
+// right.
 
 #if os(macOS)
 
@@ -8,18 +9,37 @@ import MuLispCore
 
 struct ContentView: View {
     @EnvironmentObject var model: InterpreterModel
+    @EnvironmentObject var editor: EditorState
 
     var body: some View {
         HSplitView {
-            REPLView()
-                .frame(minWidth: 420, maxWidth: .infinity,
-                       maxHeight: .infinity)
+            VSplitView {
+                if editor.isVisible {
+                    EditorPaneView()
+                        .frame(minHeight: 180, idealHeight: 340,
+                               maxHeight: .infinity)
+                }
+                REPLView()
+                    .frame(minHeight: 160, maxHeight: .infinity)
+            }
+            .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+
             CanvasView()
-                .frame(minWidth: 320, maxWidth: .infinity,
+                .frame(minWidth: 300, maxWidth: .infinity,
                        maxHeight: .infinity)
         }
         .toolbar {
             ToolbarItemGroup {
+                Button {
+                    editor.isVisible.toggle()
+                } label: {
+                    Label("エディタ",
+                          systemImage: editor.isVisible
+                          ? "rectangle.topthird.inset.filled"
+                          : "rectangle")
+                }
+                .help("エディタペインの表示を切り替えます")
+
                 if model.isRunning {
                     Button {
                         model.interrupt()

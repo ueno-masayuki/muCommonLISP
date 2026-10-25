@@ -35,6 +35,12 @@ final class InterpreterModel: ObservableObject, GraphicsSink {
                 self?.appendOutput(text)
             }
         }
+        interp.windowOpener = { gw in
+            GraphicsWindowManager.shared.open(gw)
+        }
+        interp.windowCloser = { gw in
+            GraphicsWindowManager.shared.close(gw)
+        }
         entries.append(TranscriptEntry(
             kind: .banner,
             text: "muCommonLISP — micro Common Lisp (bytecode compiler + CLOS)"))
@@ -133,6 +139,59 @@ final class InterpreterModel: ObservableObject, GraphicsSink {
         thread.stackSize = 64 * 1024 * 1024
         thread.name = "mulisp-eval"
         thread.start()
+    }
+
+    /// Evaluate code coming from the editor pane.
+    func evaluateCode(_ code: String, echo: String?) {
+        let text = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isRunning else { return }
+        entries.append(TranscriptEntry(kind: .input, text: echo ?? text))
+        isRunning = true
+
+        let thread = Thread { [weak self] in
+            guard let self = self else { return }
+            var resultEntries: [TranscriptEntry] = []
+            do {
+                let result = try self.interp.evalAll(text)
+                resultEntries.append(TranscriptEntry(
+                    kind: .result, text: self.interp.printString(result)))
+            } catch let e as LispError {
+                resultEntries.append(TranscriptEntry(
+                    kind: .error, text: ";; ERROR: \(e.message)"))
+            } catch is InterruptSignal {
+                resultEntries.append(TranscriptEntry(
+                    kind: .error, text: ";; Interrupted"))
+            } catch is ExitSignal {
+                resultEntries.append(TranscriptEntry(
+                    kind: .output, text: ";; (exit)"))
+            } catch {
+                resultEntries.append(TranscriptEntry(
+                    kind: .error, text: ";; ERROR: \(error)"))
+            }
+            DispatchQueue.main.async {
+                self.entries.append(contentsOf: resultEntries)
+                self.isRunning = false
+            }
+        }
+        thread.stackSize = 64 * 1024 * 1024
+        thread.name = "mulisp-editor-eval"
+        thread.start()
+    }
+
+    /// Symbol-name completions for the editor (case-insensitive prefix).
+    func completions(_ prefix: String) -> [String] {
+        let upper = prefix.uppercased()
+        guard !upper.isEmpty else { return [] }
+        var names = Set<String>()
+        for pkg in interp.registry.allPackages() {
+            for (name, _) in pkg.symbols where name.hasPrefix(upper) {
+                names.insert(name)
+            }
+        }
+        let lowercase = prefix == prefix.lowercased()
+        return names.sorted().prefix(200).map {
+            lowercase ? $0.lowercased() : $0
+        }
     }
 
     func interrupt() {
