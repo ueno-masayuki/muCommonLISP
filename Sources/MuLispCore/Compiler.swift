@@ -1104,7 +1104,7 @@ public final class Compiler {
         }
         let tokenSlot = ctx.scope.allocSlot()
         emitCoreCall(ctx, "%MAKE-BLOCK-TOKEN") {
-            emitConstant(ctx, .string(name.name))
+            emitConstant(ctx, .str(name.name))
             return 1
         }
         ctx.code.emit(.localSet(0, tokenSlot))

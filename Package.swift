@@ -11,9 +11,15 @@ let package = Package(
         .executable(name: "mulisp", targets: ["mulisp"]),
         .executable(name: "muCommonLISP", targets: ["muCommonLISP"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/attaswift/BigInt.git", from: "5.3.0"),
+    ],
     targets: [
         .target(
             name: "MuLispCore",
+            dependencies: [
+                .product(name: "BigInt", package: "BigInt"),
+            ],
             path: "Sources/MuLispCore"
         ),
         .executableTarget(

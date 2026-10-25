@@ -2,12 +2,17 @@
 // The Lisp reader: text -> LispValue forms.
 
 import Foundation
+import BigInt
 
 public final class Reader {
     private let chars: [Character]
     private var pos: Int = 0
     private let registry: PackageRegistry
     private let currentPackage: () -> LispPackage
+    /// Used by #. (read-time evaluation); nil disables it.
+    public var evaluator: ((LispValue) throws -> LispValue)?
+    /// User reader macros: returns a handler for a macro character, if any.
+    public var macroCharacterHandler: ((Character) -> ((Reader, Character) throws -> LispValue?)?)?
 
     public init(source: String, registry: PackageRegistry,
                 currentPackage: @escaping () -> LispPackage) {
@@ -120,8 +125,29 @@ public final class Reader {
             pos += 1
             return try readDispatch()
         default:
+            if let lookup = macroCharacterHandler, let handler = lookup(c) {
+                pos += 1
+                if let v = try handler(self, c) {
+                    return v
+                }
+                // Handler returned no value: read the next form instead.
+                return try readForm()
+            }
             return try readAtom()
         }
+    }
+
+    /// Public read for user reader-macro functions.
+    public func readSubForm() throws -> LispValue {
+        return try readForm()
+    }
+
+    public func readCharRaw() -> Character? {
+        return next()
+    }
+
+    public func peekCharRaw() -> Character? {
+        return peek()
     }
 
     private func wrap(_ symbolName: String, _ form: LispValue) -> LispValue {
@@ -174,7 +200,7 @@ public final class Reader {
                 throw ReaderError("unterminated string", unexpectedEOF: true)
             }
             if c == "\"" {
-                return .string(result)
+                return .str(result)
             }
             if c == "\\" {
                 guard let e = next() else {
@@ -194,6 +220,15 @@ public final class Reader {
     // MARK: - # dispatch
 
     private func readDispatch() throws -> LispValue {
+        // Optional numeric argument, e.g. #2A or #16R.
+        var numArg: Int? = nil
+        var numStr = ""
+        while let d = peek(), d.isNumber {
+            numStr.append(d)
+            pos += 1
+        }
+        if !numStr.isEmpty { numArg = Int(numStr) }
+
         guard let c = next() else {
             throw ReaderError("unexpected end after #", unexpectedEOF: true)
         }
@@ -219,9 +254,99 @@ public final class Reader {
             return try readRadixInteger(radix: 8)
         case "b", "B":
             return try readRadixInteger(radix: 2)
+        case "r", "R":
+            guard let radix = numArg, radix >= 2, radix <= 36 else {
+                throw ReaderError("#R requires a radix between 2 and 36")
+            }
+            return try readRadixInteger(radix: radix)
+        case "c", "C":
+            let form = try readForm()
+            guard let parts = form.asArray(), parts.count == 2,
+                  parts[0].isRealNumber, parts[1].isRealNumber else {
+                throw ReaderError("#C requires (realpart imagpart)")
+            }
+            return NumericOps.makeComplex(parts[0], parts[1])
+        case "a", "A":
+            let rank = numArg ?? 1
+            let contents = try readForm()
+            return try buildArrayLiteral(rank: rank, contents: contents)
+        case ".":
+            let form = try readForm()
+            guard let evalFn = evaluator else {
+                throw ReaderError("#. is not enabled in this context")
+            }
+            do {
+                return try evalFn(form).firstValue
+            } catch let e as ReaderError {
+                throw e
+            } catch {
+                throw ReaderError("#. evaluation failed: \(error)")
+            }
+        case "+", "-":
+            // Feature conditionals: only :MUCL and :MULISP are present.
+            let feature = try readForm()
+            let present = featurePresent(feature)
+            let keep = (c == "+") ? present : !present
+            let guarded = try readForm()
+            if keep { return guarded }
+            return try readForm()   // skip the guarded form, read the following one
         default:
             throw ReaderError("unsupported reader macro #\(c)")
         }
+    }
+
+    private func featurePresent(_ feature: LispValue) -> Bool {
+        switch feature {
+        case .symbol(let s):
+            return s.name == "MUCL" || s.name == "MULISP"
+        case .cons(let c):
+            guard case .symbol(let op) = c.car,
+                  let rest = c.cdr.asArray() else { return false }
+            switch op.name {
+            case "AND": return rest.allSatisfy { featurePresent($0) }
+            case "OR": return rest.contains { featurePresent($0) }
+            case "NOT": return !(rest.first.map { featurePresent($0) } ?? false)
+            default: return false
+            }
+        default:
+            return false
+        }
+    }
+
+    private func buildArrayLiteral(rank: Int, contents: LispValue) throws -> LispValue {
+        if rank == 1 {
+            guard let items = contents.asArray() else {
+                throw ReaderError("malformed #A contents")
+            }
+            return .vector(LispVector(items))
+        }
+        // Determine dimensions from nesting, then flatten row-major.
+        var dims: [Int] = []
+        var probe = contents
+        for _ in 0..<rank {
+            guard let items = probe.asArray() else {
+                throw ReaderError("malformed #\(rank)A contents")
+            }
+            dims.append(items.count)
+            probe = items.first ?? .null
+        }
+        var flat: [LispValue] = []
+        func flatten(_ v: LispValue, _ depth: Int) throws {
+            if depth == rank {
+                flat.append(v)
+                return
+            }
+            guard let items = v.asArray(), items.count == dims[depth] else {
+                throw ReaderError("ragged #\(rank)A contents")
+            }
+            for item in items {
+                try flatten(item, depth + 1)
+            }
+        }
+        try flatten(contents, 0)
+        let vec = LispVector(dimensions: dims, initial: .null)
+        vec.elements = flat
+        return .vector(vec)
     }
 
     private func readRadixInteger(radix: Int) throws -> LispValue {
@@ -397,8 +522,8 @@ public final class Reader {
                 if let i = Int(t) {
                     return .int(i)
                 }
-                if let d = Double(t) {
-                    return .double(d)   // integer too large for Int
+                if let b = BigInt(t) {
+                    return NumericOps.makeInteger(b)
                 }
                 throw ReaderError("invalid number syntax: \(raw)")
             case .float:
@@ -407,7 +532,17 @@ public final class Reader {
                 }
                 throw ReaderError("invalid number syntax: \(raw)")
             case .ratio:
-                throw ReaderError("ratios are not supported: \(raw)")
+                let parts = raw.split(separator: "/")
+                guard parts.count == 2,
+                      let num = BigInt(String(parts[0])),
+                      let den = BigInt(String(parts[1])) else {
+                    throw ReaderError("invalid ratio syntax: \(raw)")
+                }
+                do {
+                    return try NumericOps.makeRational(num, den)
+                } catch {
+                    throw ReaderError("division by zero in ratio: \(raw)")
+                }
             case .notANumber:
                 break
             }

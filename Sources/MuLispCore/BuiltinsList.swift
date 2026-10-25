@@ -18,9 +18,9 @@ extension Interpreter {
             }
             return items
         case .vector(let vec):
-            return vec.elements
+            return vec.activeElements
         case .string(let s):
-            return s.map { .character($0) }
+            return s.chars.map { .character($0) }
         default:
             throw typeError(v, expected: "SEQUENCE")
         }
@@ -36,7 +36,7 @@ extension Interpreter {
             for i in items {
                 if case .character(let c) = i { s.append(c) }
             }
-            return .string(s)
+            return .str(s)
         default:
             return LispValue.list(items)
         }
@@ -623,12 +623,12 @@ extension Interpreter {
                 for i in items {
                     switch i {
                     case .character(let c): s.append(c)
-                    case .string(let str): s += str
+                    case .string(let str): s += str.string
                     default:
                         throw self.typeError(i, expected: "CHARACTER")
                     }
                 }
-                return .string(s)
+                return .str(s)
             case "VECTOR", "SIMPLE-VECTOR":
                 return .vector(LispVector(items))
             default:

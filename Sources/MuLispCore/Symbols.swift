@@ -43,19 +43,66 @@ public final class LispPackage {
     public var nicknames: [String]
     public private(set) var symbols: [String: Symbol] = [:]
     public var useList: [LispPackage] = []
+    /// Names of exported symbols. When `exportsEverything` is true (the
+    /// COMMON-LISP and KEYWORD packages), every symbol counts as external.
+    public private(set) var externals: Set<String> = []
+    public var exportsEverything = false
+    /// Names shadowed in this package (import conflicts are resolved to the
+    /// local symbol).
+    public private(set) var shadowed: Set<String> = []
 
     public init(name: String, nicknames: [String] = []) {
         self.name = name
         self.nicknames = nicknames
     }
 
-    /// Find a symbol visible in this package (own or inherited).
+    public func isExternal(_ name: String) -> Bool {
+        return exportsEverything || externals.contains(name)
+    }
+
+    public func export(_ name: String) {
+        externals.insert(name)
+    }
+
+    public func unexport(_ name: String) {
+        externals.remove(name)
+    }
+
+    public func shadow(_ name: String) {
+        shadowed.insert(name)
+        if symbols[name] == nil {
+            let s = Symbol(name: name, package: self)
+            symbols[name] = s
+        }
+    }
+
+    /// Find a symbol visible in this package: its own symbols, then symbols
+    /// inherited from used packages (their external symbols).
     public func findSymbol(_ name: String) -> Symbol? {
         if let s = symbols[name] { return s }
         for used in useList {
-            if let s = used.symbols[name] { return s }
+            if let s = used.symbols[name], used.isExternal(name) {
+                return s
+            }
         }
         return nil
+    }
+
+    /// All symbols accessible in this package.
+    public func accessibleSymbols() -> [Symbol] {
+        var seen = Set<String>()
+        var result: [Symbol] = []
+        for (n, s) in symbols {
+            seen.insert(n)
+            result.append(s)
+        }
+        for used in useList {
+            for (n, s) in used.symbols where used.isExternal(n) && !seen.contains(n) {
+                seen.insert(n)
+                result.append(s)
+            }
+        }
+        return result
     }
 
     /// Intern: find or create a symbol in this package.
@@ -74,6 +121,19 @@ public final class LispPackage {
     public func add(_ symbol: Symbol) {
         symbols[symbol.name] = symbol
     }
+
+    /// Remove a symbol from this package. Returns true when one was removed.
+    public func removeSymbol(_ name: String) -> Bool {
+        if let s = symbols.removeValue(forKey: name) {
+            externals.remove(name)
+            shadowed.remove(name)
+            if s.package === self {
+                s.package = nil
+            }
+            return true
+        }
+        return false
+    }
 }
 
 /// Global registry of packages for one interpreter instance.
@@ -85,12 +145,24 @@ public final class PackageRegistry {
 
     public init() {
         lisp = LispPackage(name: "COMMON-LISP", nicknames: ["CL", "LISP"])
+        lisp.exportsEverything = true
         keyword = LispPackage(name: "KEYWORD", nicknames: [])
+        keyword.exportsEverything = true
         user = LispPackage(name: "COMMON-LISP-USER", nicknames: ["CL-USER", "USER"])
         user.useList = [lisp]
         register(lisp)
         register(keyword)
         register(user)
+    }
+
+    public func allPackages() -> [LispPackage] {
+        var seen = Set<ObjectIdentifier>()
+        var result: [LispPackage] = []
+        for (_, p) in packages where !seen.contains(ObjectIdentifier(p)) {
+            seen.insert(ObjectIdentifier(p))
+            result.append(p)
+        }
+        return result
     }
 
     public func register(_ p: LispPackage) {

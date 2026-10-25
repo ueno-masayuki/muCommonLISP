@@ -160,83 +160,274 @@ extension Interpreter {
             return LispValue.list(h.allPairs().map { $0.0 })
         }
 
-        // --- Vectors / arrays (one-dimensional only) ---
+        // --- Vectors / arrays ---
 
         defBuiltin("VECTOR", 0, nil) { args in
             .vector(LispVector(args.map { $0.firstValue }))
         }
 
         defBuiltin("MAKE-ARRAY", 1, nil) { [unowned self] args in
-            var size = 0
+            var dims: [Int] = []
             switch args[0].firstValue {
             case .int(let n):
-                size = n
-            case .cons(let c):
-                guard case .int(let n) = c.car, c.cdr.isNil else {
-                    throw self.lispError("ERROR",
-                        "only one-dimensional arrays are supported")
+                dims = [n]
+            case .null:
+                dims = []
+            case .cons:
+                for d in args[0].firstValue.asArray() ?? [] {
+                    guard case .int(let n) = d, n >= 0 else {
+                        throw self.typeError(d, expected: "INTEGER")
+                    }
+                    dims.append(n)
                 }
-                size = n
             default:
                 throw self.typeError(args[0], expected: "INTEGER")
             }
             let keys = try self.parseKeys(args, from: 1)
             let initial = keys["INITIAL-ELEMENT"] ?? .null
-            if let contents = keys["INITIAL-CONTENTS"] {
-                let items = try self.seqToArray(contents)
-                return .vector(LispVector(items))
+            var fillPointer: Int? = nil
+            if let fp = keys["FILL-POINTER"] {
+                if case .int(let n) = fp {
+                    fillPointer = n
+                } else if fp.isTrue {
+                    fillPointer = dims.first ?? 0
+                }
             }
-            return .vector(LispVector([LispValue](repeating: initial,
-                                                  count: size)))
+            let adjustable = (keys["ADJUSTABLE"]?.isTrue) ?? false
+            let vec = LispVector(dimensions: dims.isEmpty ? [0] : dims,
+                                 initial: initial,
+                                 fillPointer: fillPointer,
+                                 adjustable: adjustable)
+            if let contents = keys["INITIAL-CONTENTS"] {
+                if dims.count <= 1 {
+                    vec.elements = try self.seqToArray(contents)
+                    vec.dimensions = [vec.elements.count]
+                } else {
+                    var flat: [LispValue] = []
+                    func flatten(_ v: LispValue, _ depth: Int) throws {
+                        if depth == dims.count {
+                            flat.append(v)
+                            return
+                        }
+                        let items = try self.seqToArray(v)
+                        guard items.count == dims[depth] else {
+                            throw self.lispError("ERROR",
+                                "initial-contents shape mismatch")
+                        }
+                        for i in items { try flatten(i, depth + 1) }
+                    }
+                    try flatten(contents, 0)
+                    vec.elements = flat
+                }
+            }
+            return .vector(vec)
         }
 
-        defBuiltin("AREF", 2, 2) { [unowned self] args in
+        defBuiltin("AREF", 2, nil) { [unowned self] args in
             switch args[0].firstValue {
             case .vector(let v):
-                guard case .int(let i) = args[1].firstValue, i >= 0,
-                      i < v.elements.count else {
-                    throw self.lispError("ERROR", "aref index out of range")
+                var subs: [Int] = []
+                for a in args.dropFirst() {
+                    guard case .int(let i) = a.firstValue else {
+                        throw self.typeError(a, expected: "INTEGER")
+                    }
+                    subs.append(i)
                 }
-                return v.elements[i]
+                guard let idx = v.rowMajorIndex(subs) else {
+                    throw self.lispError("ERROR", "aref subscripts out of range")
+                }
+                return v.elements[idx]
             case .string(let s):
-                guard case .int(let i) = args[1].firstValue, i >= 0,
-                      i < s.count else {
+                guard args.count == 2,
+                      case .int(let i) = args[1].firstValue, i >= 0,
+                      i < s.chars.count else {
                     throw self.lispError("ERROR", "aref index out of range")
                 }
-                return .character(Array(s)[i])
+                return .character(s.chars[i])
             default:
                 throw self.typeError(args[0], expected: "ARRAY")
             }
         }
         lisp.intern("SVREF").function = lisp.intern("AREF").function
+        lisp.intern("ROW-MAJOR-AREF").function = lisp.intern("AREF").function
 
         defSetfHandler("AREF") { [unowned self] args in
-            // (newval vector index)
-            guard case .vector(let v) = args[1].firstValue else {
-                throw self.typeError(args[1], expected: "VECTOR")
+            // (newval array subscripts...)
+            switch args[1].firstValue {
+            case .vector(let v):
+                var subs: [Int] = []
+                for a in args.dropFirst(2) {
+                    guard case .int(let i) = a.firstValue else {
+                        throw self.typeError(a, expected: "INTEGER")
+                    }
+                    subs.append(i)
+                }
+                guard let idx = v.rowMajorIndex(subs) else {
+                    throw self.lispError("ERROR", "aref subscripts out of range")
+                }
+                v.elements[idx] = args[0].firstValue
+                return args[0]
+            case .string(let s):
+                guard args.count == 3,
+                      case .int(let i) = args[2].firstValue, i >= 0,
+                      i < s.chars.count,
+                      case .character(let c) = args[0].firstValue else {
+                    throw self.lispError("ERROR", "invalid string aref assignment")
+                }
+                s.chars[i] = c
+                return args[0]
+            default:
+                throw self.typeError(args[1], expected: "ARRAY")
             }
-            guard case .int(let i) = args[2].firstValue, i >= 0,
-                  i < v.elements.count else {
-                throw self.lispError("ERROR", "aref index out of range")
-            }
-            v.elements[i] = args[0].firstValue
-            return args[0]
         }
         setfHandlers[lisp.intern("SVREF")] = setfHandlers[lisp.intern("AREF")]
 
-        defBuiltin("VECTOR-PUSH-EXTEND", 2, 2) { [unowned self] args in
+        defBuiltin("VECTOR-PUSH", 2, 2) { [unowned self] args in
+            guard case .vector(let v) = args[1].firstValue,
+                  let fp = v.fillPointer else {
+                throw self.lispError("ERROR",
+                    "vector-push requires a vector with a fill pointer")
+            }
+            if fp >= v.elements.count {
+                return .null
+            }
+            v.elements[fp] = args[0].firstValue
+            v.fillPointer = fp + 1
+            return .int(fp)
+        }
+
+        defBuiltin("VECTOR-PUSH-EXTEND", 2, 3) { [unowned self] args in
             guard case .vector(let v) = args[1].firstValue else {
                 throw self.typeError(args[1], expected: "VECTOR")
             }
+            if let fp = v.fillPointer {
+                if fp < v.elements.count {
+                    v.elements[fp] = args[0].firstValue
+                } else {
+                    v.elements.append(args[0].firstValue)
+                }
+                v.fillPointer = fp + 1
+                v.dimensions = [max(v.elements.count, fp + 1)]
+                return .int(fp)
+            }
             v.elements.append(args[0].firstValue)
+            v.dimensions = [v.elements.count]
             return .int(v.elements.count - 1)
         }
 
+        defBuiltin("VECTOR-POP", 1, 1) { [unowned self] args in
+            guard case .vector(let v) = args[0].firstValue,
+                  let fp = v.fillPointer, fp > 0 else {
+                throw self.lispError("ERROR",
+                    "vector-pop requires a non-empty vector with a fill pointer")
+            }
+            v.fillPointer = fp - 1
+            return v.elements[fp - 1]
+        }
+
+        defBuiltin("FILL-POINTER", 1, 1) { [unowned self] args in
+            guard case .vector(let v) = args[0].firstValue,
+                  let fp = v.fillPointer else {
+                throw self.lispError("ERROR", "no fill pointer")
+            }
+            return .int(fp)
+        }
+
+        defSetfHandler("FILL-POINTER") { [unowned self] args in
+            guard case .vector(let v) = args[1].firstValue,
+                  case .int(let n) = args[0].firstValue,
+                  n >= 0, n <= v.elements.count else {
+                throw self.lispError("ERROR", "invalid fill pointer")
+            }
+            v.fillPointer = n
+            return args[0]
+        }
+
         defBuiltin("ARRAY-DIMENSION", 2, 2) { [unowned self] args in
+            guard case .int(let axis) = args[1].firstValue else {
+                throw self.typeError(args[1], expected: "INTEGER")
+            }
+            switch args[0].firstValue {
+            case .vector(let v):
+                guard axis >= 0 && axis < v.dimensions.count else {
+                    throw self.lispError("ERROR", "array axis out of range")
+                }
+                return .int(v.dimensions[axis])
+            case .string(let s):
+                return .int(s.chars.count)
+            default:
+                throw self.typeError(args[0], expected: "ARRAY")
+            }
+        }
+
+        defBuiltin("ARRAY-DIMENSIONS", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .vector(let v):
+                return LispValue.list(v.dimensions.map { .int($0) })
+            case .string(let s):
+                return LispValue.list([.int(s.chars.count)])
+            default:
+                throw self.typeError(args[0], expected: "ARRAY")
+            }
+        }
+
+        defBuiltin("ARRAY-RANK", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .vector(let v): return .int(v.rank)
+            case .string: return .int(1)
+            default:
+                throw self.typeError(args[0], expected: "ARRAY")
+            }
+        }
+
+        defBuiltin("ARRAY-TOTAL-SIZE", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .vector(let v): return .int(v.totalSize)
+            case .string(let s): return .int(s.chars.count)
+            default:
+                throw self.typeError(args[0], expected: "ARRAY")
+            }
+        }
+
+        defBuiltin("ARRAYP", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .vector, .string: return self.tValue
+            default: return .null
+            }
+        }
+
+        defBuiltin("ADJUST-ARRAY", 2, nil) { [unowned self] args in
             guard case .vector(let v) = args[0].firstValue else {
                 throw self.typeError(args[0], expected: "VECTOR")
             }
-            return .int(v.elements.count)
+            var dims: [Int] = []
+            switch args[1].firstValue {
+            case .int(let n): dims = [n]
+            default:
+                for d in args[1].firstValue.asArray() ?? [] {
+                    if case .int(let n) = d { dims.append(n) }
+                }
+            }
+            let keys = try self.parseKeys(args, from: 2)
+            let initial = keys["INITIAL-ELEMENT"] ?? .null
+            let newTotal = dims.reduce(1, *)
+            if v.rank == 1 && dims.count == 1 {
+                if newTotal > v.elements.count {
+                    v.elements.append(contentsOf:
+                        [LispValue](repeating: initial,
+                                    count: newTotal - v.elements.count))
+                } else {
+                    v.elements.removeSubrange(newTotal...)
+                }
+                v.dimensions = dims
+            } else {
+                var newElements = [LispValue](repeating: initial, count: newTotal)
+                let common = min(newTotal, v.elements.count)
+                for i in 0..<common { newElements[i] = v.elements[i] }
+                v.elements = newElements
+                v.dimensions = dims
+            }
+            return args[0]
         }
 
         // --- Output ---
@@ -277,7 +468,7 @@ extension Interpreter {
             guard case .string(let s) = args[0].firstValue else {
                 throw self.typeError(args[0], expected: "STRING")
             }
-            try self.writeTo(args.count > 1 ? args[1] : self.tValue, s)
+            try self.writeTo(args.count > 1 ? args[1] : self.tValue, s.string)
             return args[0]
         }
 
@@ -285,7 +476,8 @@ extension Interpreter {
             guard case .string(let s) = args[0].firstValue else {
                 throw self.typeError(args[0], expected: "STRING")
             }
-            try self.writeTo(args.count > 1 ? args[1] : self.tValue, s + "\n")
+            try self.writeTo(args.count > 1 ? args[1] : self.tValue,
+                             s.string + "\n")
             return args[0]
         }
 
@@ -298,12 +490,12 @@ extension Interpreter {
         }
 
         defBuiltin("PRIN1-TO-STRING", 1, 1) { [unowned self] args in
-            .string(Printer.toString(args[0].firstValue, escape: true,
-                                     interp: self))
+            .str(Printer.toString(args[0].firstValue, escape: true,
+                                  interp: self))
         }
         defBuiltin("PRINC-TO-STRING", 1, 1) { [unowned self] args in
-            .string(Printer.toString(args[0].firstValue, escape: false,
-                                     interp: self))
+            .str(Printer.toString(args[0].firstValue, escape: false,
+                                  interp: self))
         }
         lisp.intern("WRITE-TO-STRING").function =
             lisp.intern("PRIN1-TO-STRING").function
@@ -318,7 +510,7 @@ extension Interpreter {
             }
             let text = s.buffer
             s.buffer = ""
-            return .string(text)
+            return .str(text)
         }
 
         // --- Reading ---
@@ -327,9 +519,7 @@ extension Interpreter {
             guard case .string(let s) = args[0].firstValue else {
                 throw self.typeError(args[0], expected: "STRING")
             }
-            let reader = Reader(source: s, registry: self.registry) {
-                [unowned self] in self.currentPackage
-            }
+            let reader = self.makeReader(source: s.string)
             do {
                 guard let form = try reader.read() else {
                     throw self.lispError("END-OF-FILE", "no form in string")

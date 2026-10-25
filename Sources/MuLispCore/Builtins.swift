@@ -325,7 +325,7 @@ extension Interpreter {
         }
 
         defBuiltin("%CONDITION-MESSAGE", 1, 1) { [unowned self] args in
-            return .string(self.conditionMessage(args[0].firstValue))
+            return .str(self.conditionMessage(args[0].firstValue))
         }
 
         // --- Misc ---
@@ -334,7 +334,7 @@ extension Interpreter {
             self.gensymCounter += 1
             var prefix = "G"
             if args.count == 1, case .string(let p) = args[0].firstValue {
-                prefix = p
+                prefix = p.string
             }
             return .symbol(Symbol(name: "\(prefix)\(self.gensymCounter)",
                                   package: nil))
@@ -393,7 +393,7 @@ extension Interpreter {
         let datum = args[0].firstValue
         switch datum {
         case .string(let fmt):
-            let message = try formatToString(control: fmt,
+            let message = try formatToString(control: fmt.string,
                                              args: Array(args.dropFirst()))
             let condition = makeConditionInstance(
                 defaultClass, message: message,

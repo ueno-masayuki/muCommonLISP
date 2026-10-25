@@ -1,7 +1,8 @@
 // BuiltinsNumeric.swift
-// Arithmetic and numeric predicates.
+// Arithmetic over the full numeric tower, and numeric predicates.
 
 import Foundation
+import BigInt
 
 extension Interpreter {
 
@@ -17,22 +18,32 @@ extension Interpreter {
                     throw self.typeError(v, expected: "NUMBER")
                 case .divisionByZero:
                     throw self.lispError("DIVISION-BY-ZERO", "division by zero")
+                case .notAReal(let v):
+                    throw self.typeError(v, expected: "REAL")
                 }
             }
         }
 
         func requireDouble(_ v: LispValue) throws -> Double {
             guard let d = v.firstValue.asDouble else {
-                throw self.typeError(v, expected: "NUMBER")
+                throw self.typeError(v, expected: "REAL")
             }
             return d
         }
 
         func requireInt(_ v: LispValue) throws -> Int {
-            guard case .int(let i) = v.firstValue else {
+            guard let i = v.firstValue.asInt else {
                 throw self.typeError(v, expected: "INTEGER")
             }
             return i
+        }
+
+        func requireBigInt(_ v: LispValue) throws -> BigInt {
+            switch v.firstValue {
+            case .int(let i): return BigInt(i)
+            case .bignum(let b): return b
+            default: throw self.typeError(v, expected: "INTEGER")
+            }
         }
 
         defBuiltin("+", 0, nil) { args in
@@ -88,6 +99,18 @@ extension Interpreter {
             try wrapNumeric { try NumericOps.sub(args[0].firstValue, .int(1)) }
         }
 
+        defBuiltin("=", 1, nil) { [unowned self] args in
+            try wrapNumeric {
+                for i in 0..<(args.count - 1) {
+                    if try !NumericOps.numericEqual(args[i].firstValue,
+                                                    args[i + 1].firstValue) {
+                        return .null
+                    }
+                }
+                return self.tValue
+            }
+        }
+
         func comparison(_ name: String, _ ok: @escaping (Int) -> Bool) {
             defBuiltin(name, 1, nil) { [unowned self] args in
                 try wrapNumeric {
@@ -100,7 +123,6 @@ extension Interpreter {
                 }
             }
         }
-        comparison("=") { $0 == 0 }
         comparison("<") { $0 < 0 }
         comparison(">") { $0 > 0 }
         comparison("<=") { $0 <= 0 }
@@ -110,8 +132,8 @@ extension Interpreter {
             try wrapNumeric {
                 for i in 0..<args.count {
                     for j in (i + 1)..<args.count {
-                        if try NumericOps.compare(args[i].firstValue,
-                                                  args[j].firstValue) == 0 {
+                        if try NumericOps.numericEqual(args[i].firstValue,
+                                                       args[j].firstValue) {
                             return .null
                         }
                     }
@@ -144,71 +166,77 @@ extension Interpreter {
             }
         }
 
-        defBuiltin("ABS", 1, 1) { [unowned self] args in
-            switch args[0].firstValue {
-            case .int(let i): return .int(abs(i))
-            case .double(let d): return .double(abs(d))
-            default: throw self.typeError(args[0], expected: "NUMBER")
-            }
+        defBuiltin("ABS", 1, 1) { args in
+            try wrapNumeric { try NumericOps.absValue(args[0].firstValue) }
         }
 
-        func floorLike(_ name: String, _ f: @escaping (Double) -> Double) {
+        // FLOOR / CEILING / TRUNCATE / ROUND: exact for exact arguments.
+        func floorLike(_ name: String,
+                       _ intRound: @escaping (BigInt, BigInt) -> BigInt,
+                       _ dblRound: @escaping (Double) -> Double) {
             defBuiltin(name, 1, 2) { [unowned self] args in
-                var x = args[0].firstValue
-                if args.count == 2 {
-                    x = try wrapNumeric {
-                        try NumericOps.div(args[0].firstValue, args[1].firstValue)
+                try wrapNumeric {
+                    let a = args[0].firstValue
+                    let b = args.count == 2 ? args[1].firstValue : .int(1)
+                    // Exact path: both rational.
+                    if let (an, ad) = NumericOps.rationalValue(a),
+                       let (bn, bd) = NumericOps.rationalValue(b) {
+                        if bn == 0 {
+                            throw NumericError(kind: .divisionByZero)
+                        }
+                        // a/b = (an*bd) / (ad*bn)
+                        let num = an * bd
+                        let den = ad * bn
+                        let q = intRound(num, den)
+                        // remainder = a - q*b
+                        let r = try NumericOps.sub(a,
+                            try NumericOps.mul(NumericOps.makeInteger(q), b))
+                        return .values([NumericOps.makeInteger(q), r])
                     }
-                    // Integer-exact division already yields an int quotient;
-                    // recompute on doubles for the general case.
-                    let a = try requireDouble(args[0])
-                    let b = try requireDouble(args[1])
-                    if b == 0 {
-                        throw self.lispError("DIVISION-BY-ZERO", "division by zero")
+                    let x = try requireDouble(args[0])
+                    let y = args.count == 2 ? try requireDouble(args[1]) : 1.0
+                    if y == 0 {
+                        throw NumericError(kind: .divisionByZero)
                     }
-                    x = .double(a / b)
-                }
-                let d = try requireDouble(x)
-                let q = f(d)
-                let quotient = LispValue.int(Int(q))
-                // remainder = x - q*y
-                if args.count == 2 {
-                    let a = try requireDouble(args[0])
-                    let b = try requireDouble(args[1])
-                    let rem = a - q * b
-                    let remValue: LispValue
-                    if case .int = args[0].firstValue,
-                       case .int = args[1].firstValue {
-                        remValue = .int(Int(rem))
-                    } else {
-                        remValue = .double(rem)
+                    let q = dblRound(x / y)
+                    let rem = x - q * y
+                    guard let qi = Int(exactly: q) else {
+                        return .values([.double(q), .double(rem)])
                     }
-                    return .values([quotient, remValue])
+                    return .values([.int(qi), .double(rem)])
                 }
-                let rem = d - q
-                let remValue: LispValue
-                if case .int = args[0].firstValue {
-                    remValue = .int(0)
-                } else {
-                    remValue = .double(rem)
-                }
-                return .values([quotient, remValue])
             }
         }
-        floorLike("FLOOR") { $0.rounded(.down) }
-        floorLike("CEILING") { $0.rounded(.up) }
-        floorLike("TRUNCATE") { $0.rounded(.towardZero) }
-        floorLike("ROUND") { $0.rounded(.toNearestOrEven) }
+        func floorQ(_ n: BigInt, _ d: BigInt) -> BigInt {
+            return NumericOps.floorDiv(n, d).0
+        }
+        func ceilQ(_ n: BigInt, _ d: BigInt) -> BigInt {
+            let (q, r) = NumericOps.floorDiv(n, d)
+            return r == 0 ? q : q + 1
+        }
+        func truncQ(_ n: BigInt, _ d: BigInt) -> BigInt {
+            return n / d
+        }
+        func roundQ(_ n: BigInt, _ d: BigInt) -> BigInt {
+            // Round half to even.
+            let (q, r) = NumericOps.floorDiv(n, d)
+            let twice = 2 * r
+            if twice < d { return q }
+            if twice > d { return q + 1 }
+            return q % 2 == 0 ? q : q + 1
+        }
+        floorLike("FLOOR", floorQ) { $0.rounded(.down) }
+        floorLike("CEILING", ceilQ) { $0.rounded(.up) }
+        floorLike("TRUNCATE", truncQ) { $0.rounded(.towardZero) }
+        floorLike("ROUND", roundQ) { $0.rounded(.toNearestOrEven) }
 
         defBuiltin("MOD", 2, 2) { [unowned self] args in
-            switch (args[0].firstValue, args[1].firstValue) {
-            case (.int(let a), .int(let b)):
-                if b == 0 {
-                    throw self.lispError("DIVISION-BY-ZERO", "division by zero")
+            try wrapNumeric {
+                if let a = NumericOps.bigIntValue(args[0].firstValue),
+                   let b = NumericOps.bigIntValue(args[1].firstValue) {
+                    if b == 0 { throw NumericError(kind: .divisionByZero) }
+                    return NumericOps.makeInteger(NumericOps.floorDiv(a, b).1)
                 }
-                let r = a % b
-                return .int((r != 0 && (r < 0) != (b < 0)) ? r + b : r)
-            default:
                 let a = try requireDouble(args[0])
                 let b = try requireDouble(args[1])
                 if b == 0 {
@@ -220,13 +248,12 @@ extension Interpreter {
         }
 
         defBuiltin("REM", 2, 2) { [unowned self] args in
-            switch (args[0].firstValue, args[1].firstValue) {
-            case (.int(let a), .int(let b)):
-                if b == 0 {
-                    throw self.lispError("DIVISION-BY-ZERO", "division by zero")
+            try wrapNumeric {
+                if let a = NumericOps.bigIntValue(args[0].firstValue),
+                   let b = NumericOps.bigIntValue(args[1].firstValue) {
+                    if b == 0 { throw NumericError(kind: .divisionByZero) }
+                    return NumericOps.makeInteger(a % b)
                 }
-                return .int(a % b)
-            default:
                 let a = try requireDouble(args[0])
                 let b = try requireDouble(args[1])
                 if b == 0 {
@@ -236,24 +263,19 @@ extension Interpreter {
             }
         }
 
-        defBuiltin("EXPT", 2, 2) { [unowned self] args in
-            switch (args[0].firstValue, args[1].firstValue) {
-            case (.int(let base), .int(let power)) where power >= 0:
-                var result = 1
-                var overflow = false
-                for _ in 0..<power {
-                    let (r, o) = result.multipliedReportingOverflow(by: base)
-                    if o { overflow = true; break }
-                    result = r
-                }
-                if !overflow { return .int(result) }
-                return .double(pow(Double(base), Double(power)))
-            default:
-                let a = try requireDouble(args[0])
-                let b = try requireDouble(args[1])
-                _ = self
-                return .double(pow(a, b))
+        defBuiltin("EXPT", 2, 2) { args in
+            try wrapNumeric {
+                try NumericOps.expt(args[0].firstValue, args[1].firstValue)
             }
+        }
+
+        defBuiltin("SQRT", 1, 1) { args in
+            try wrapNumeric { try NumericOps.sqrtValue(args[0].firstValue) }
+        }
+
+        defBuiltin("ISQRT", 1, 1) { args in
+            let b = try requireBigInt(args[0])
+            return NumericOps.makeInteger(b.squareRoot())
         }
 
         func mathFn(_ name: String, _ f: @escaping (Double) -> Double) {
@@ -266,6 +288,9 @@ extension Interpreter {
         mathFn("TAN", tan)
         mathFn("ASIN", asin)
         mathFn("ACOS", acos)
+        mathFn("SINH", sinh)
+        mathFn("COSH", cosh)
+        mathFn("TANH", tanh)
         mathFn("EXP", exp)
 
         defBuiltin("ATAN", 1, 2) { args in
@@ -286,76 +311,58 @@ extension Interpreter {
             return .double(log(x))
         }
 
-        defBuiltin("SQRT", 1, 1) { args in
-            let x = try requireDouble(args[0])
-            if case .int(let i) = args[0].firstValue, i >= 0 {
-                let r = Int(Double(i).squareRoot())
-                if r * r == i { return .int(r) }
-            }
-            return .double(x.squareRoot())
-        }
-
-        defBuiltin("ISQRT", 1, 1) { args in
-            let i = try requireInt(args[0])
-            return .int(Int(Double(i).squareRoot()))
-        }
-
         defBuiltin("GCD", 0, nil) { args in
-            func gcd(_ a: Int, _ b: Int) -> Int {
-                var (x, y) = (abs(a), abs(b))
-                while y != 0 { (x, y) = (y, x % y) }
-                return x
-            }
-            var acc = 0
+            var acc = BigInt(0)
             for a in args {
-                acc = gcd(acc, try requireInt(a))
+                let v = try requireBigInt(a)
+                acc = BigInt(acc.magnitude.greatestCommonDivisor(with: v.magnitude))
             }
-            return .int(acc)
+            return NumericOps.makeInteger(acc)
         }
 
         defBuiltin("LCM", 0, nil) { args in
-            func gcd(_ a: Int, _ b: Int) -> Int {
-                var (x, y) = (abs(a), abs(b))
-                while y != 0 { (x, y) = (y, x % y) }
-                return x
-            }
-            var acc = 1
+            var acc = BigInt(1)
             for a in args {
-                let v = abs(try requireInt(a))
+                let v = abs(try requireBigInt(a))
                 if v == 0 { return .int(0) }
-                acc = acc / gcd(acc, v) * v
+                let g = BigInt(acc.magnitude.greatestCommonDivisor(with: v.magnitude))
+                acc = acc / g * v
             }
-            return .int(acc)
+            return NumericOps.makeInteger(acc)
         }
 
         defBuiltin("LOGAND", 0, nil) { args in
-            var acc = -1
-            for a in args { acc &= try requireInt(a) }
-            return .int(acc)
+            var acc = BigInt(-1)
+            for a in args { acc &= try requireBigInt(a) }
+            return NumericOps.makeInteger(acc)
         }
         defBuiltin("LOGIOR", 0, nil) { args in
-            var acc = 0
-            for a in args { acc |= try requireInt(a) }
-            return .int(acc)
+            var acc = BigInt(0)
+            for a in args { acc |= try requireBigInt(a) }
+            return NumericOps.makeInteger(acc)
         }
         defBuiltin("LOGXOR", 0, nil) { args in
-            var acc = 0
-            for a in args { acc ^= try requireInt(a) }
-            return .int(acc)
+            var acc = BigInt(0)
+            for a in args { acc ^= try requireBigInt(a) }
+            return NumericOps.makeInteger(acc)
         }
         defBuiltin("LOGNOT", 1, 1) { args in
-            return .int(~(try requireInt(args[0])))
+            return NumericOps.makeInteger(~(try requireBigInt(args[0])))
         }
         defBuiltin("ASH", 2, 2) { args in
-            let x = try requireInt(args[0])
+            let x = try requireBigInt(args[0])
             let n = try requireInt(args[1])
             if n >= 0 {
-                if n >= Int.bitWidth { return .int(0) }
-                return .int(x << n)
+                return NumericOps.makeInteger(x << n)
             }
-            let shift = -n
-            if shift >= Int.bitWidth { return .int(x < 0 ? -1 : 0) }
-            return .int(x >> shift)
+            return NumericOps.makeInteger(x >> (-n))
+        }
+        defBuiltin("INTEGER-LENGTH", 1, 1) { args in
+            let x = try requireBigInt(args[0])
+            if x >= 0 {
+                return .int(x.bitWidth - 1)
+            }
+            return .int((~x).bitWidth - 1)
         }
 
         func numPredicate(_ name: String,
@@ -365,38 +372,157 @@ extension Interpreter {
             }
         }
         numPredicate("ZEROP") { v in
-            try requireDouble(v) == 0
+            guard v.isNumber else {
+                throw NumericError(kind: .notANumber(v))
+            }
+            return NumericOps.isZero(v)
         }
         numPredicate("PLUSP") { v in
-            try requireDouble(v) > 0
+            try NumericOps.compare(v, .int(0)) > 0
         }
         numPredicate("MINUSP") { v in
-            try requireDouble(v) < 0
+            try NumericOps.compare(v, .int(0)) < 0
         }
         numPredicate("EVENP") { v in
-            try requireInt(v) % 2 == 0
+            try requireBigInt(v) % 2 == 0
         }
         numPredicate("ODDP") { v in
-            try requireInt(v) % 2 != 0
+            try requireBigInt(v) % 2 != 0
         }
         numPredicate("NUMBERP") { v in v.isNumber }
-        numPredicate("INTEGERP") { v in
-            if case .int = v { return true }
-            return false
-        }
+        numPredicate("INTEGERP") { v in v.isExactInteger }
         numPredicate("FLOATP") { v in
             if case .double = v { return true }
             return false
         }
-        numPredicate("REALP") { v in v.isNumber }
+        numPredicate("REALP") { v in v.isRealNumber }
         numPredicate("RATIONALP") { v in
-            if case .int = v { return true }
+            switch v {
+            case .int, .bignum, .ratio: return true
+            default: return false
+            }
+        }
+        numPredicate("COMPLEXP") { v in
+            if case .complex = v { return true }
             return false
+        }
+
+        defBuiltin("SIGNUM", 1, 1) { args in
+            try wrapNumeric {
+                let v = args[0].firstValue
+                if case .double(let d) = v {
+                    return .double(d > 0 ? 1 : (d < 0 ? -1 : 0))
+                }
+                let c = try NumericOps.compare(v, .int(0))
+                return .int(c)
+            }
+        }
+
+        defBuiltin("NUMERATOR", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .int, .bignum: return args[0].firstValue
+            case .ratio(let r): return NumericOps.makeInteger(r.num)
+            default: throw self.typeError(args[0], expected: "RATIONAL")
+            }
+        }
+
+        defBuiltin("DENOMINATOR", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .int, .bignum: return .int(1)
+            case .ratio(let r): return NumericOps.makeInteger(r.den)
+            default: throw self.typeError(args[0], expected: "RATIONAL")
+            }
+        }
+
+        defBuiltin("COMPLEX", 1, 2) { [unowned self] args in
+            let re = args[0].firstValue
+            let im = args.count == 2 ? args[1].firstValue : .int(0)
+            guard re.isRealNumber, im.isRealNumber else {
+                throw self.typeError(re.isRealNumber ? args[1] : args[0],
+                                     expected: "REAL")
+            }
+            return NumericOps.makeComplex(re, im)
+        }
+
+        defBuiltin("REALPART", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .complex(let c): return c.re
+            default:
+                guard args[0].firstValue.isNumber else {
+                    throw self.typeError(args[0], expected: "NUMBER")
+                }
+                return args[0].firstValue
+            }
+        }
+
+        defBuiltin("IMAGPART", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .complex(let c): return c.im
+            case .double: return .double(0)
+            default:
+                guard args[0].firstValue.isNumber else {
+                    throw self.typeError(args[0], expected: "NUMBER")
+                }
+                return .int(0)
+            }
+        }
+
+        defBuiltin("CONJUGATE", 1, 1) { args in
+            try wrapNumeric {
+                if case .complex(let c) = args[0].firstValue {
+                    return NumericOps.makeComplex(c.re,
+                                                  try NumericOps.negate(c.im))
+                }
+                return args[0].firstValue
+            }
+        }
+
+        defBuiltin("PHASE", 1, 1) { args in
+            if case .complex(let c) = args[0].firstValue,
+               let re = c.re.asDouble, let im = c.im.asDouble {
+                return .double(atan2(im, re))
+            }
+            let d = try requireDouble(args[0])
+            return .double(d >= 0 ? 0 : Double.pi)
+        }
+
+        defBuiltin("CIS", 1, 1) { args in
+            let theta = try requireDouble(args[0])
+            return NumericOps.makeComplex(.double(cos(theta)),
+                                          .double(sin(theta)))
         }
 
         defBuiltin("FLOAT", 1, 2) { args in
             return .double(try requireDouble(args[0]))
         }
+
+        defBuiltin("RATIONAL", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .int, .bignum, .ratio:
+                return args[0].firstValue
+            case .double(let d):
+                guard d.isFinite else {
+                    throw self.lispError("ERROR", "cannot rationalize \(d)")
+                }
+                // Exact conversion via the binary representation.
+                let (mantissa, exponent) = (d.significandBitPattern, d.exponent)
+                _ = mantissa; _ = exponent
+                // Use a simple decimal approach: scale by 2^52.
+                let scaled = d * Double(1 << 52)
+                if scaled.rounded() == scaled, abs(scaled) < 9e15 {
+                    return try wrapNumeric {
+                        try NumericOps.makeRational(BigInt(Int(scaled)),
+                                                    BigInt(1) << 52)
+                    }
+                }
+                return try wrapNumeric {
+                    try NumericOps.makeRational(BigInt(Int(d.rounded())), 1)
+                }
+            default:
+                throw self.typeError(args[0], expected: "REAL")
+            }
+        }
+        lisp.intern("RATIONALIZE").function = lisp.intern("RATIONAL").function
 
         defBuiltin("RANDOM", 1, 1) { [unowned self] args in
             switch args[0].firstValue {

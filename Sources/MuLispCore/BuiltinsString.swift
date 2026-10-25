@@ -5,16 +5,21 @@ import Foundation
 
 extension Interpreter {
 
+    func requireStringDesignator(_ v: LispValue) throws -> String {
+        switch v.firstValue {
+        case .string(let s): return s.string
+        case .symbol(let s): return s.name
+        case .character(let c): return String(c)
+        case .null: return "NIL"
+        default: throw self.typeError(v, expected: "STRING")
+        }
+    }
+
     func registerStringBuiltins() {
         let lisp = registry.lisp
 
         func requireString(_ v: LispValue) throws -> String {
-            switch v.firstValue {
-            case .string(let s): return s
-            case .symbol(let s): return s.name
-            case .character(let c): return String(c)
-            default: throw self.typeError(v, expected: "STRING")
-            }
+            return try self.requireStringDesignator(v)
         }
 
         func requireChar(_ v: LispValue) throws -> Character {
@@ -26,16 +31,42 @@ extension Interpreter {
 
         // --- Strings ---
 
-        defBuiltin("STRING", 1, 1) { args in .string(try requireString(args[0])) }
+        defBuiltin("STRING", 1, 1) { args in .str(try requireString(args[0])) }
+
+        defBuiltin("MAKE-STRING", 1, nil) { [unowned self] args in
+            guard case .int(let n) = args[0].firstValue, n >= 0 else {
+                throw self.typeError(args[0], expected: "INTEGER")
+            }
+            let keys = try self.parseKeys(args, from: 1)
+            var fill: Character = " "
+            if let e = keys["INITIAL-ELEMENT"],
+               case .character(let c) = e { fill = c }
+            return .string(LispString(chars: [Character](repeating: fill,
+                                                         count: n)))
+        }
 
         defBuiltin("STRING-UPCASE", 1, 1) { args in
-            .string(try requireString(args[0]).uppercased())
+            .str(try requireString(args[0]).uppercased())
         }
         defBuiltin("STRING-DOWNCASE", 1, 1) { args in
-            .string(try requireString(args[0]).lowercased())
+            .str(try requireString(args[0]).lowercased())
         }
         defBuiltin("STRING-CAPITALIZE", 1, 1) { args in
-            .string(try requireString(args[0]).capitalized)
+            .str(try requireString(args[0]).capitalized)
+        }
+        defBuiltin("NSTRING-UPCASE", 1, 1) { [unowned self] args in
+            guard case .string(let s) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "STRING")
+            }
+            s.chars = Array(s.string.uppercased())
+            return args[0]
+        }
+        defBuiltin("NSTRING-DOWNCASE", 1, 1) { [unowned self] args in
+            guard case .string(let s) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "STRING")
+            }
+            s.chars = Array(s.string.lowercased())
+            return args[0]
         }
 
         func stringCompare(_ name: String,
@@ -60,52 +91,72 @@ extension Interpreter {
         stringCompare("STRING-EQUAL", { $0 == $1 }, caseInsensitive: true)
         stringCompare("STRING-LESSP", { $0 < $1 }, caseInsensitive: true)
         stringCompare("STRING-GREATERP", { $0 > $1 }, caseInsensitive: true)
+        stringCompare("STRING-NOT-EQUAL", { $0 != $1 }, caseInsensitive: true)
 
         defBuiltin("CHAR", 2, 2) { [unowned self] args in
-            let s = try requireString(args[0])
+            guard case .string(let s) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "STRING")
+            }
             guard case .int(let i) = args[1].firstValue, i >= 0,
-                  i < s.count else {
+                  i < s.chars.count else {
                 throw self.lispError("ERROR", "char index out of range")
             }
-            return .character(Array(s)[i])
+            return .character(s.chars[i])
         }
         lisp.intern("SCHAR").function = lisp.intern("CHAR").function
 
-        defBuiltin("STRING-TRIM", 2, 2) { args in
-            let bagChars: Set<Character>
-            switch args[0].firstValue {
-            case .string(let s): bagChars = Set(s)
+        defSetfHandler("CHAR") { [unowned self] args in
+            // (newval string index)
+            guard case .string(let s) = args[1].firstValue else {
+                throw self.typeError(args[1], expected: "STRING")
+            }
+            guard case .character(let c) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "CHARACTER")
+            }
+            guard case .int(let i) = args[2].firstValue, i >= 0,
+                  i < s.chars.count else {
+                throw self.lispError("ERROR", "char index out of range")
+            }
+            s.chars[i] = c
+            return args[0]
+        }
+        setfHandlers[lisp.intern("SCHAR")] = setfHandlers[lisp.intern("CHAR")]
+
+        func charBag(_ v: LispValue) throws -> Set<Character> {
+            switch v.firstValue {
+            case .string(let s):
+                return Set(s.chars)
             default:
                 var set = Set<Character>()
-                if let items = args[0].firstValue.asArray() {
+                if let items = v.firstValue.asArray() {
                     for i in items {
                         if case .character(let c) = i { set.insert(c) }
                     }
                 }
-                bagChars = set
+                return set
             }
-            var s = Array(try requireString(args[1]))
-            while let f = s.first, bagChars.contains(f) { s.removeFirst() }
-            while let l = s.last, bagChars.contains(l) { s.removeLast() }
-            return .string(String(s))
         }
 
-        defBuiltin("SEARCH", 2, nil) { args in
-            let needle = try requireString(args[0])
-            let haystack = try requireString(args[1])
-            if needle.isEmpty { return .int(0) }
-            let hChars = Array(haystack)
-            let nChars = Array(needle)
-            if nChars.count > hChars.count { return .null }
-            for start in 0...(hChars.count - nChars.count) {
-                var match = true
-                for k in 0..<nChars.count where hChars[start + k] != nChars[k] {
-                    match = false
-                    break
-                }
-                if match { return .int(start) }
-            }
-            return .null
+        defBuiltin("STRING-TRIM", 2, 2) { args in
+            let bag = try charBag(args[0])
+            var s = Array(try requireString(args[1]))
+            while let f = s.first, bag.contains(f) { s.removeFirst() }
+            while let l = s.last, bag.contains(l) { s.removeLast() }
+            return .str(String(s))
+        }
+
+        defBuiltin("STRING-LEFT-TRIM", 2, 2) { args in
+            let bag = try charBag(args[0])
+            var s = Array(try requireString(args[1]))
+            while let f = s.first, bag.contains(f) { s.removeFirst() }
+            return .str(String(s))
+        }
+
+        defBuiltin("STRING-RIGHT-TRIM", 2, 2) { args in
+            let bag = try charBag(args[0])
+            var s = Array(try requireString(args[1]))
+            while let l = s.last, bag.contains(l) { s.removeLast() }
+            return .str(String(s))
         }
 
         defBuiltin("PARSE-INTEGER", 1, nil) { [unowned self] args in
@@ -121,19 +172,14 @@ extension Interpreter {
             throw self.lispError("PARSE-ERROR", "cannot parse integer: \(s)")
         }
 
-        defBuiltin("STRING-TO-NUMBER", 1, 1) { args in
-            let s = try requireString(args[0])
-            if let i = Int(s) { return .int(i) }
-            if let d = Double(s) { return .double(d) }
-            return .null
-        }
-
         // --- Characters ---
 
         defBuiltin("CHAR-CODE", 1, 1) { args in
             let c = try requireChar(args[0])
             return .int(Int(c.unicodeScalars.first!.value))
         }
+        lisp.intern("CHAR-INT").function = lisp.intern("CHAR-CODE").function
+
         defBuiltin("CODE-CHAR", 1, 1) { [unowned self] args in
             guard case .int(let i) = args[0].firstValue,
                   let scalar = Unicode.Scalar(i) else {
@@ -153,6 +199,39 @@ extension Interpreter {
             if case .character = args[0].firstValue { return self.tValue }
             return .null
         }
+        defBuiltin("CHARACTER", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .character(let c): return .character(c)
+            case .string(let s) where s.chars.count == 1:
+                return .character(s.chars[0])
+            case .symbol(let s) where s.name.count == 1:
+                return .character(s.name.first!)
+            default:
+                throw self.typeError(args[0], expected: "CHARACTER")
+            }
+        }
+
+        defBuiltin("CHAR-NAME", 1, 1) { args in
+            let c = try requireChar(args[0])
+            switch c {
+            case " ": return .str("Space")
+            case "\n": return .str("Newline")
+            case "\t": return .str("Tab")
+            case "\r": return .str("Return")
+            default: return .null
+            }
+        }
+
+        defBuiltin("NAME-CHAR", 1, 1) { args in
+            let name = try requireString(args[0]).uppercased()
+            switch name {
+            case "SPACE": return .character(" ")
+            case "NEWLINE", "LINEFEED": return .character("\n")
+            case "TAB": return .character("\t")
+            case "RETURN": return .character("\r")
+            default: return .null
+            }
+        }
 
         func charCompare(_ name: String,
                          _ ok: @escaping (Character, Character) -> Bool) {
@@ -170,6 +249,12 @@ extension Interpreter {
         charCompare("CHAR-EQUAL") {
             String($0).uppercased() == String($1).uppercased()
         }
+        charCompare("CHAR-LESSP") {
+            String($0).uppercased() < String($1).uppercased()
+        }
+        charCompare("CHAR-GREATERP") {
+            String($0).uppercased() > String($1).uppercased()
+        }
 
         defBuiltin("DIGIT-CHAR-P", 1, 2) { args in
             let c = try requireChar(args[0])
@@ -181,18 +266,46 @@ extension Interpreter {
             return .null
         }
 
+        defBuiltin("DIGIT-CHAR", 1, 2) { args in
+            guard case .int(let w) = args[0].firstValue else { return .null }
+            var radix = 10
+            if args.count == 2, case .int(let r) = args[1].firstValue { radix = r }
+            if w >= 0 && w < radix {
+                let digits = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+                return .character(digits[w])
+            }
+            return .null
+        }
+
         defBuiltin("ALPHA-CHAR-P", 1, 1) { [unowned self] args in
             return try requireChar(args[0]).isLetter ? self.tValue : .null
+        }
+        defBuiltin("ALPHANUMERICP", 1, 1) { [unowned self] args in
+            let c = try requireChar(args[0])
+            return (c.isLetter || c.isNumber) ? self.tValue : .null
+        }
+        defBuiltin("UPPER-CASE-P", 1, 1) { [unowned self] args in
+            return try requireChar(args[0]).isUppercase ? self.tValue : .null
+        }
+        defBuiltin("LOWER-CASE-P", 1, 1) { [unowned self] args in
+            return try requireChar(args[0]).isLowercase ? self.tValue : .null
+        }
+        defBuiltin("BOTH-CASE-P", 1, 1) { [unowned self] args in
+            let c = try requireChar(args[0])
+            return (c.isUppercase || c.isLowercase) ? self.tValue : .null
+        }
+        defBuiltin("WHITESPACEP", 1, 1) { [unowned self] args in
+            return try requireChar(args[0]).isWhitespace ? self.tValue : .null
         }
 
         // --- Symbols ---
 
         defBuiltin("SYMBOL-NAME", 1, 1) { [unowned self] args in
             guard case .symbol(let s) = args[0].firstValue else {
-                if args[0].firstValue.isNil { return .string("NIL") }
+                if args[0].firstValue.isNil { return .str("NIL") }
                 throw self.typeError(args[0], expected: "SYMBOL")
             }
-            return .string(s.name)
+            return .str(s.name)
         }
 
         defBuiltin("SYMBOL-VALUE", 1, 1) { [unowned self] args in
@@ -231,6 +344,8 @@ extension Interpreter {
             }
             return .function(f)
         }
+        lisp.intern("FDEFINITION").function =
+            lisp.intern("SYMBOL-FUNCTION").function
 
         defSetfHandler("SYMBOL-FUNCTION") { [unowned self] args in
             guard case .symbol(let s) = args[1].firstValue,
@@ -254,6 +369,19 @@ extension Interpreter {
             }
             if let p = s.package { return .package(p) }
             return .null
+        }
+
+        defBuiltin("COPY-SYMBOL", 1, 2) { [unowned self] args in
+            guard case .symbol(let s) = args[0].firstValue else {
+                throw self.typeError(args[0], expected: "SYMBOL")
+            }
+            let copy = Symbol(name: s.name, package: nil)
+            if args.count == 2 && args[1].isTrue {
+                copy.value = s.value
+                copy.function = s.function
+                copy.plist = s.plist
+            }
+            return .symbol(copy)
         }
 
         defBuiltin("BOUNDP", 1, 1) { [unowned self] args in
@@ -306,8 +434,16 @@ extension Interpreter {
             if args.count == 2 {
                 pkg = try self.resolvePackage(args[1])
             }
-            if let s = pkg.findSymbol(name) {
-                return .values([.symbol(s), .symbol(self.registry.keyword.intern("INTERNAL"))])
+            if let s = pkg.symbols[name] {
+                let status = pkg.isExternal(name) ? "EXTERNAL" : "INTERNAL"
+                return .values([.symbol(s),
+                                .symbol(self.registry.keyword.intern(status))])
+            }
+            for used in pkg.useList {
+                if let s = used.symbols[name], used.isExternal(name) || true {
+                    return .values([.symbol(s),
+                                    .symbol(self.registry.keyword.intern("INHERITED"))])
+                }
             }
             return .values([.null, .null])
         }
@@ -326,108 +462,25 @@ extension Interpreter {
             return .null
         }
 
-        // --- Packages ---
-
-        defBuiltin("MAKE-PACKAGE", 1, nil) { [unowned self] args in
-            let name = try requireString(args[0])
-            return .package(self.registry.findOrCreate(name))
+        defBuiltin("SPECIAL-OPERATOR-P", 1, 1) { [unowned self] args in
+            guard case .symbol(let s) = args[0].firstValue else { return .null }
+            return Interpreter.specialFormNameSet.contains(s.name)
+                ? self.tValue : .null
         }
 
-        defBuiltin("FIND-PACKAGE", 1, 1) { [unowned self] args in
-            if case .package(let p) = args[0].firstValue { return .package(p) }
-            let name = try requireString(args[0])
-            if let p = self.registry.find(name) { return .package(p) }
-            return .null
-        }
-
-        defBuiltin("PACKAGE-NAME", 1, 1) { [unowned self] args in
-            let p = try self.resolvePackage(args[0])
-            return .string(p.name)
-        }
-
-        defBuiltin("%IN-PACKAGE", 1, 1) { [unowned self] args in
-            let name = try requireString(args[0])
-            let p = self.registry.findOrCreate(name)
-            self.setCurrentPackage(p)
-            return .package(p)
-        }
-
-        defBuiltin("%ENSURE-PACKAGE", 3, 3) { [unowned self] args in
-            let name = try requireString(args[0])
-            let p = self.registry.findOrCreate(name)
-            for nick in args[1].asArray() ?? [] {
-                let n = try requireString(nick)
-                if !p.nicknames.contains(n) {
-                    p.nicknames.append(n)
+        defBuiltin("CONSTANTP", 1, 1) { [unowned self] args in
+            switch args[0].firstValue {
+            case .symbol(let s): return s.isConstant ? self.tValue : .null
+            case .cons(let c):
+                if case .symbol(let q) = c.car, q.name == "QUOTE" {
+                    return self.tValue
                 }
-                self.registry.register(p)
+                return .null
+            default: return self.tValue
             }
-            var useList: [LispPackage] = []
-            for u in args[2].asArray() ?? [] {
-                useList.append(try self.resolvePackage(u))
-            }
-            if !useList.isEmpty {
-                p.useList = useList
-            }
-            return .package(p)
         }
 
-        // IN-PACKAGE / DEFPACKAGE macros.
-        defMacro("IN-PACKAGE") { [unowned self] forms in
-            guard forms.count == 1 else {
-                throw CompileError("malformed in-package")
-            }
-            let name: String
-            switch forms[0] {
-            case .symbol(let s): name = s.name
-            case .string(let s): name = s
-            default: throw CompileError("malformed in-package")
-            }
-            return self.lst(self.sym("%IN-PACKAGE"), .string(name))
-        }
-
-        defMacro("DEFPACKAGE") { [unowned self] forms in
-            guard !forms.isEmpty else {
-                throw CompileError("malformed defpackage")
-            }
-            let name: String
-            switch forms[0] {
-            case .symbol(let s): name = s.name
-            case .string(let s): name = s
-            default: throw CompileError("malformed defpackage")
-            }
-            var nicknames: [LispValue] = []
-            var uses: [LispValue] = []
-            for opt in forms.dropFirst() {
-                guard let parts = opt.asArray(), !parts.isEmpty,
-                      case .symbol(let k) = parts[0] else { continue }
-                switch k.name {
-                case "NICKNAMES":
-                    for n in parts.dropFirst() {
-                        if case .symbol(let s) = n {
-                            nicknames.append(.string(s.name))
-                        } else if case .string = n {
-                            nicknames.append(n)
-                        }
-                    }
-                case "USE":
-                    for u in parts.dropFirst() {
-                        if case .symbol(let s) = u {
-                            uses.append(.string(s.name))
-                        } else if case .string = u {
-                            uses.append(u)
-                        }
-                    }
-                case "EXPORT", "DOCUMENTATION", "IMPORT-FROM", "SHADOW":
-                    break   // accepted and ignored
-                default:
-                    break
-                }
-            }
-            return self.lst(self.sym("%ENSURE-PACKAGE"), .string(name),
-                            self.quoted(LispValue.list(nicknames)),
-                            self.quoted(LispValue.list(uses)))
-        }
+        registerPackageBuiltins()
     }
 
     func resolvePackage(_ v: LispValue) throws -> LispPackage {
@@ -435,8 +488,8 @@ extension Interpreter {
         case .package(let p):
             return p
         case .string(let s):
-            guard let p = registry.find(s) else {
-                throw lispError("PACKAGE-ERROR", "no package named \(s)")
+            guard let p = registry.find(s.string) else {
+                throw lispError("PACKAGE-ERROR", "no package named \(s.string)")
             }
             return p
         case .symbol(let s):

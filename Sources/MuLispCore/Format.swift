@@ -4,6 +4,7 @@
 // with column prefixes (~10A, ~5D) and digit prefixes (~,2F).
 
 import Foundation
+import BigInt
 
 extension Interpreter {
 
@@ -12,11 +13,11 @@ extension Interpreter {
             guard case .string(let control) = args[1].firstValue else {
                 throw self.typeError(args[1], expected: "STRING")
             }
-            let text = try self.formatToString(control: control,
+            let text = try self.formatToString(control: control.string,
                                                args: Array(args.dropFirst(2)))
             switch args[0].firstValue {
             case .null:
-                return .string(text)
+                return .str(text)
             default:
                 try self.writeTo(args[0], text)
                 return .null
@@ -79,14 +80,22 @@ extension Interpreter {
                 case "D", "X", "O", "B":
                     let v = try take()
                     var s: String
-                    if case .int(let n) = v {
+                    switch v {
+                    case .int(let n):
                         switch directive {
                         case "X": s = String(n, radix: 16).uppercased()
                         case "O": s = String(n, radix: 8)
                         case "B": s = String(n, radix: 2)
                         default: s = String(n)
                         }
-                    } else {
+                    case .bignum(let n):
+                        switch directive {
+                        case "X": s = String(n, radix: 16).uppercased()
+                        case "O": s = String(n, radix: 8)
+                        case "B": s = String(n, radix: 2)
+                        default: s = String(n)
+                        }
+                    default:
                         s = Printer.toString(v, escape: false, interp: self)
                     }
                     if let c = col, s.count < c {

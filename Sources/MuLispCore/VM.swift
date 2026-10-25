@@ -320,6 +320,8 @@ public final class VM {
                 throw interp.typeError(v, expected: "NUMBER")
             case .divisionByZero:
                 throw interp.lispError("DIVISION-BY-ZERO", "division by zero")
+            case .notAReal(let v):
+                throw interp.typeError(v, expected: "REAL")
             }
         }
     }

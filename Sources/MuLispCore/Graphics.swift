@@ -185,7 +185,7 @@ extension Interpreter {
             let size = args.count == 4 ? try num(args[3]) : 14.0
             self.graphics.append(.text(x: try num(args[0]),
                                        y: try num(args[1]),
-                                       string: s, size: size))
+                                       string: s.string, size: size))
             return .null
         }
 

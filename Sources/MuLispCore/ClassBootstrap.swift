@@ -18,7 +18,10 @@ public final class SystemClasses {
     public var real: LispClass!
     public var rational: LispClass!
     public var integer: LispClass!
+    public var ratioClass: LispClass!
     public var float: LispClass!
+    public var complexClass: LispClass!
+    public var graphicsWindowClass: LispClass!
     public var array: LispClass!
     public var vector: LispClass!
     public var string: LispClass!
@@ -65,7 +68,10 @@ extension Interpreter {
         classes.real = try make("REAL", [classes.number])
         classes.rational = try make("RATIONAL", [classes.real])
         classes.integer = try make("INTEGER", [classes.rational])
+        classes.ratioClass = try make("RATIO", [classes.rational])
         classes.float = try make("FLOAT", [classes.real])
+        classes.complexClass = try make("COMPLEX", [classes.number])
+        classes.graphicsWindowClass = try make("GRAPHICS-WINDOW", [t])
         classes.array = try make("ARRAY", [t])
         classes.vector = try make("VECTOR", [classes.array, classes.sequence])
         classes.string = try make("STRING", [classes.vector])
@@ -141,7 +147,11 @@ extension Interpreter {
         switch v {
         case .null: return classes.null
         case .int: return classes.integer
+        case .bignum: return classes.integer
+        case .ratio: return classes.ratioClass
         case .double: return classes.float
+        case .complex: return classes.complexClass
+        case .graphicsWindow: return classes.graphicsWindowClass
         case .string: return classes.string
         case .character: return classes.character
         case .symbol(let s):

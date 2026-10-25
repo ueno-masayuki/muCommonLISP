@@ -24,6 +24,9 @@ public final class Interpreter {
     var initializeInstanceGF: GenericFunction!
     var printObjectGF: GenericFunction!
 
+    /// User reader macros installed with SET-MACRO-CHARACTER.
+    var readtableMacros: [Character: LispFunction] = [:]
+
     public var gensymCounter = 0
     public let graphics = GraphicsContext2D()
 
@@ -64,6 +67,8 @@ public final class Interpreter {
         "THE", "DECLARE", "TAGBODY", "GO", "MACROLET", "PROGV",
         "NIL", "T", "OTHERWISE",
     ]
+
+    static let specialFormNameSet: Set<String> = Set(specialFormNames)
 
     public init() {
         for name in Interpreter.specialFormNames {
@@ -248,12 +253,40 @@ public final class Interpreter {
         }
     }
 
-    /// Read and evaluate every form in `source`; returns the last value.
-    @discardableResult
-    public func evalAll(_ source: String) throws -> LispValue {
+    /// Build a reader wired to this interpreter (current package, #. and
+    /// user reader macros).
+    public func makeReader(source: String) -> Reader {
         let reader = Reader(source: source, registry: registry) {
             [unowned self] in self.currentPackage
         }
+        reader.evaluator = { [unowned self] form in
+            try self.eval(form)
+        }
+        reader.macroCharacterHandler = { [unowned self] ch in
+            self.readtableMacroHandler(ch)
+        }
+        return reader
+    }
+
+    func readtableMacroHandler(_ ch: Character)
+        -> ((Reader, Character) throws -> LispValue?)? {
+        guard let fn = readtableMacros[ch] else { return nil }
+        return { [unowned self] reader, c in
+            let proxy = LispStream(kind: .stringInput)
+            proxy.backingReader = reader
+            let result = try self.applyFunction(fn, [.stream(proxy),
+                                                     .character(c)])
+            if case .values(let vs) = result, vs.isEmpty {
+                return nil   // the macro produced no object
+            }
+            return result.firstValue
+        }
+    }
+
+    /// Read and evaluate every form in `source`; returns the last value.
+    @discardableResult
+    public func evalAll(_ source: String) throws -> LispValue {
+        let reader = makeReader(source: source)
         var result = LispValue.null
         while true {
             let form: LispValue?
@@ -308,7 +341,7 @@ public final class Interpreter {
             return f
         }
         return Builtin(name: name, minArgs: 0, maxArgs: nil) { _ in
-            throw LispError(condition: .string("missing core function \(name)"),
+            throw LispError(condition: .str("missing core function \(name)"),
                             message: "missing core function \(name)")
         }
     }
@@ -333,11 +366,11 @@ public final class Interpreter {
                                       slots: [(String, LispValue)] = []) -> LispValue {
         guard let cls = findClassByName(className)
                 ?? findClassByName("CONDITION") else {
-            return .string(message)
+            return .str(message)
         }
         let inst = StandardInstance(clazz: cls)
         try? setSlotValue(inst, registry.lisp.intern("%MESSAGE"),
-                          .string(message))
+                          .str(message))
         for (name, value) in slots {
             try? setSlotValue(inst, registry.lisp.intern(name), value)
         }
@@ -365,20 +398,20 @@ public final class Interpreter {
     public func conditionMessage(_ condition: LispValue) -> String {
         switch condition.firstValue {
         case .string(let s):
-            return s
+            return s.string
         case .instance(let inst):
             let msgSym = registry.lisp.intern("%MESSAGE")
             if let v = try? slotValue(inst, msgSym), case .string(let m) = v {
-                return m
+                return m.string
             }
             let fcSym = registry.lisp.intern("FORMAT-CONTROL")
             if let fc = try? slotValue(inst, fcSym), case .string(let ctrl) = fc {
                 let faSym = registry.lisp.intern("FORMAT-ARGUMENTS")
                 let fargs = (try? slotValue(inst, faSym))?.asArray() ?? []
-                if let text = try? formatToString(control: ctrl, args: fargs) {
+                if let text = try? formatToString(control: ctrl.string, args: fargs) {
                     return text
                 }
-                return ctrl
+                return ctrl.string
             }
             return "condition of type \(inst.clazz.name.name)"
         default:
@@ -419,7 +452,7 @@ public final class Interpreter {
            inst.clazz.isSubclass(of: condClass) {
             let msgSym = registry.lisp.intern("%MESSAGE")
             if let v = try? slotValue(inst, msgSym), case .string(let m) = v {
-                return "#<\(inst.clazz.name.name): \(m)>"
+                return "#<\(inst.clazz.name.name): \(m.string)>"
             }
             return "#<\(inst.clazz.name.name): \(conditionMessage(.instance(inst)))>"
         }

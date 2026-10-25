@@ -538,7 +538,7 @@ extension Interpreter {
             }
             let gf = try self.ensureGenericFunction(named: s, nRequired: n)
             if args.count > 2, case .string(let doc) = args[2].firstValue {
-                gf.documentation = doc
+                gf.documentation = doc.string
             }
             return .symbol(s)
         }
@@ -584,7 +584,7 @@ extension Interpreter {
             }
             var doc: String? = nil
             if args.count > 3, case .string(let d) = args[3].firstValue {
-                doc = d
+                doc = d.string
             }
             let cls = try self.ensureClass(name: name, superNames: superNames,
                                            slotSpecs: specs,

@@ -2,6 +2,7 @@
 // Printing Lisp values (PRIN1 / PRINC).
 
 import Foundation
+import BigInt
 
 public enum Printer {
 
@@ -29,18 +30,28 @@ public enum Printer {
             out += "NIL"
         case .int(let i):
             out += String(i)
+        case .bignum(let b):
+            out += String(b)
+        case .ratio(let r):
+            out += "\(r.num)/\(r.den)"
         case .double(let d):
             out += formatDouble(d)
+        case .complex(let c):
+            out += "#C("
+            write(c.re, escape: escape, interp: interp, depth: depth + 1, into: &out)
+            out += " "
+            write(c.im, escape: escape, interp: interp, depth: depth + 1, into: &out)
+            out += ")"
         case .string(let s):
             if escape {
                 out += "\""
-                for c in s {
+                for c in s.chars {
                     if c == "\"" || c == "\\" { out += "\\" }
                     out.append(c)
                 }
                 out += "\""
             } else {
-                out += s
+                out += s.string
             }
         case .character(let c):
             if escape {
@@ -53,12 +64,19 @@ public enum Printer {
         case .cons(let c):
             writeCons(c, escape: escape, interp: interp, depth: depth, into: &out)
         case .vector(let v):
-            out += "#("
-            for (i, e) in v.elements.enumerated() {
-                if i > 0 { out += " " }
-                write(e, escape: escape, interp: interp, depth: depth + 1, into: &out)
+            if v.rank != 1 {
+                out += "#\(v.rank)A"
+                writeArraySlice(v, dim: 0, offset: 0, escape: escape,
+                                interp: interp, depth: depth, into: &out)
+            } else {
+                out += "#("
+                for (i, e) in v.activeElements.enumerated() {
+                    if i > 0 { out += " " }
+                    write(e, escape: escape, interp: interp,
+                          depth: depth + 1, into: &out)
+                }
+                out += ")"
             }
-            out += ")"
         case .hashTable(let h):
             out += "#<HASH-TABLE :COUNT \(h.count)>"
         case .function(let f):
@@ -81,8 +99,10 @@ public enum Printer {
             out += "#<PACKAGE \(p.name)>"
         case .blockToken(let t):
             out += "#<BLOCK \(t.name)>"
-        case .stream:
-            out += "#<STREAM>"
+        case .stream(let s):
+            out += "#<STREAM \(s.kind)>"
+        case .graphicsWindow(let w):
+            out += "#<GRAPHICS-WINDOW \"\(w.title)\"\(w.isClosed ? " closed" : "")>"
         case .values(let vs):
             if vs.isEmpty {
                 out += "#<no values>"
@@ -93,6 +113,25 @@ public enum Printer {
                 }
             }
         }
+    }
+
+    private static func writeArraySlice(_ v: LispVector, dim: Int, offset: Int,
+                                        escape: Bool, interp: Interpreter?,
+                                        depth: Int, into out: inout String) {
+        if dim == v.dimensions.count {
+            write(v.elements[offset], escape: escape, interp: interp,
+                  depth: depth + 1, into: &out)
+            return
+        }
+        let stride = v.dimensions[(dim + 1)...].reduce(1, *)
+        out += "("
+        for i in 0..<v.dimensions[dim] {
+            if i > 0 { out += " " }
+            writeArraySlice(v, dim: dim + 1, offset: offset + i * stride,
+                            escape: escape, interp: interp, depth: depth,
+                            into: &out)
+        }
+        out += ")"
     }
 
     public static func formatDouble(_ d: Double) -> String {
