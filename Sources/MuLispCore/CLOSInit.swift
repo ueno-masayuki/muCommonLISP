@@ -229,8 +229,8 @@ extension Interpreter {
                 "cannot make an instance of built-in class \(cls.name.name)")
         }
         let inst = StandardInstance(clazz: cls)
-        let gf = initializeInstanceGF
-        _ = try dispatchGeneric(gf, [.instance(inst)] + initargs)
+        _ = try dispatchGeneric(initializeInstanceGF,
+                                [.instance(inst)] + initargs)
         return .instance(inst)
     }
 
