@@ -1,32 +1,11 @@
 // CanvasView.swift
-// Renders the interpreter's DrawCommand list with SwiftUI Canvas.
+// Renders a DrawCommand list with SwiftUI Canvas. Used by the graphics
+// windows (both the automatic main canvas window and make-graphics-window).
 
 #if os(macOS)
 
 import SwiftUI
 import MuLispCore
-
-struct CanvasView: View {
-    @EnvironmentObject var model: InterpreterModel
-
-    var body: some View {
-        GeometryReader { geo in
-            Canvas { context, size in
-                CanvasRenderer.render(model.drawCommands,
-                                      context: &context, size: size)
-            }
-            .background(Color(nsColor: .textBackgroundColor))
-            .onAppear {
-                model.interp.graphics.canvasWidth = Double(geo.size.width)
-                model.interp.graphics.canvasHeight = Double(geo.size.height)
-            }
-            .onChange(of: geo.size) { newSize in
-                model.interp.graphics.canvasWidth = Double(newSize.width)
-                model.interp.graphics.canvasHeight = Double(newSize.height)
-            }
-        }
-    }
-}
 
 enum CanvasRenderer {
     static func render(_ commands: [DrawCommand],

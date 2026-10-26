@@ -1,5 +1,6 @@
 // EditorModel.swift
-// Buffers and file handling for the built-in editor.
+// Buffers for the editor. Every buffer lives in its own window; the main
+// (evaluation) window holds only the REPL.
 
 #if os(macOS)
 
@@ -32,78 +33,13 @@ final class EditorDocument: ObservableObject, Identifiable {
 
 final class EditorState: ObservableObject {
     @Published var documents: [EditorDocument] = []
-    @Published var selectedID: UUID?
-    @Published var isVisible = true
-    /// Buffers currently shown in their own window instead of the tab bar.
-    @Published var detachedIDs: Set<UUID> = []
-
-    init() {
-        newDocument()
-    }
-
-    /// Buffers shown in the main window's tab bar.
-    var tabbedDocuments: [EditorDocument] {
-        return documents.filter { !detachedIDs.contains($0.id) }
-    }
-
-    var selectedDocument: EditorDocument? {
-        if let id = selectedID, !detachedIDs.contains(id),
-           let doc = documents.first(where: { $0.id == id }) {
-            return doc
-        }
-        return tabbedDocuments.first
-    }
-
-    /// The buffer File-menu actions should operate on: the key detached
-    /// window's buffer when one is key, else the selected tab.
-    var menuTargetDocument: EditorDocument? {
-        if let id = EditorWindowManager.shared.activeDetachedID,
-           let doc = documents.first(where: { $0.id == id }) {
-            return doc
-        }
-        return selectedDocument
-    }
-
-    // MARK: - Detached windows
-
-    /// Move a buffer out of the tab bar into its own window.
-    func detach(_ doc: EditorDocument) {
-        guard !detachedIDs.contains(doc.id) else {
-            EditorWindowManager.shared.focus(doc)
-            return
-        }
-        syncFromTextView(doc)
-        doc.textView = nil
-        detachedIDs.insert(doc.id)
-        if selectedID == doc.id {
-            selectedID = tabbedDocuments.first?.id
-        }
-        EditorWindowManager.shared.open(doc)
-    }
-
-    /// Called when a detached window was closed by the user: the buffer
-    /// returns to the tab bar.
-    func reattach(_ doc: EditorDocument) {
-        syncFromTextView(doc)
-        doc.textView = nil
-        detachedIDs.remove(doc.id)
-        selectedID = doc.id
-        isVisible = true
-    }
-
-    /// Button action: close the window and return the buffer to the tabs.
-    func reattachToTabs(_ doc: EditorDocument) {
-        EditorWindowManager.shared.close(doc)
-        reattach(doc)
-    }
 
     @discardableResult
     func newDocument() -> EditorDocument {
         let doc = EditorDocument(
             text: ";; muCommonLISP editor — ⌘E で評価, ⌘⇧E でバッファ全体を評価\n\n")
         documents.append(doc)
-        selectedID = doc.id
-        isVisible = true
+        EditorWindowManager.shared.open(doc)
         return doc
     }
 
@@ -118,13 +54,8 @@ final class EditorState: ObservableObject {
     }
 
     func open(url: URL) {
-        isVisible = true
         if let existing = documents.first(where: { $0.url == url }) {
-            if detachedIDs.contains(existing.id) {
-                EditorWindowManager.shared.focus(existing)
-            } else {
-                selectedID = existing.id
-            }
+            EditorWindowManager.shared.open(existing)
             return
         }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
@@ -132,50 +63,59 @@ final class EditorState: ObservableObject {
             return
         }
         let doc = EditorDocument(url: url, text: text)
-        // Drop the pristine untitled buffer when a real file comes in.
-        if documents.count == 1,
-           let only = documents.first,
-           only.url == nil, !only.isDirty {
-            documents.removeAll()
-        }
         documents.append(doc)
-        selectedID = doc.id
+        EditorWindowManager.shared.open(doc)
     }
 
-    func saveDocument(_ doc: EditorDocument?, as saveAs: Bool = false) {
-        guard let doc = doc else { return }
+    /// The buffer File-menu actions operate on: the key editor window's.
+    var menuTargetDocument: EditorDocument? {
+        if let id = EditorWindowManager.shared.activeDetachedID,
+           let doc = documents.first(where: { $0.id == id }) {
+            return doc
+        }
+        return documents.first
+    }
+
+    @discardableResult
+    func saveDocument(_ doc: EditorDocument?, as saveAs: Bool = false) -> Bool {
+        guard let doc = doc else { return false }
         syncFromTextView(doc)
         var target = doc.url
         if target == nil || saveAs {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = doc.url?.lastPathComponent
                 ?? "untitled.lisp"
-            guard panel.runModal() == .OK, let url = panel.url else { return }
+            guard panel.runModal() == .OK, let url = panel.url else {
+                return false
+            }
             target = url
         }
-        guard let url = target else { return }
+        guard let url = target else { return false }
         do {
             try doc.text.write(to: url, atomically: true, encoding: .utf8)
             doc.url = url
             doc.isDirty = false
             EditorWindowManager.shared.updateTitle(doc)
+            return true
         } catch {
             NSSound.beep()
+            return false
         }
     }
 
+    /// Close a buffer (and its window), asking to save when dirty.
     func closeDocument(_ doc: EditorDocument) {
-        if detachedIDs.contains(doc.id) {
-            EditorWindowManager.shared.close(doc)
-            detachedIDs.remove(doc.id)
+        if EditorWindowManager.shared.isDetachedWindowOpen(doc) {
+            // The window's close path prompts and calls forget(_:).
+            EditorWindowManager.shared.requestClose(doc)
+        } else {
+            forget(doc)
         }
+    }
+
+    /// Bookkeeping after a window is gone.
+    func forget(_ doc: EditorDocument) {
         documents.removeAll { $0.id == doc.id }
-        if selectedID == doc.id {
-            selectedID = tabbedDocuments.last?.id
-        }
-        if tabbedDocuments.isEmpty && detachedIDs.isEmpty {
-            newDocument()
-        }
     }
 
     func syncFromTextView(_ doc: EditorDocument) {
@@ -243,8 +183,6 @@ final class EditorState: ObservableObject {
                     if position >= start && position <= end {
                         best = (start, end)
                     }
-                    // Also remember the last form before the cursor as a
-                    // fallback.
                     if best == nil && start <= position {
                         best = (start, end)
                     }
@@ -263,7 +201,6 @@ final class EditorState: ObservableObject {
     }
 
     /// Search all open buffers for a definition of `name`.
-    /// Returns (document, character offset).
     func findDefinition(of name: String) -> (EditorDocument, Int)? {
         let escaped = NSRegularExpression.escapedPattern(for: name)
         let pattern = "\\(def[a-zA-Z-]*\\s+(\\(setf\\s+)?\(escaped)[\\s)\\n]"
@@ -282,6 +219,49 @@ final class EditorState: ObservableObject {
             }
         }
         return nil
+    }
+
+    /// Jump from `doc` to the definition of the symbol at its cursor.
+    func jumpToDefinition(from doc: EditorDocument) {
+        guard let tv = doc.textView else { return }
+        let text = tv.string as NSString
+        var range = tv.selectedRange()
+        if range.length == 0 {
+            let symbolChars = CharacterSet(charactersIn:
+                "abcdefghijklmnopqrstuvwxyz"
+                + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-+*/<>=!?%&_.")
+            var start = min(range.location, text.length)
+            var end = start
+            while start > 0,
+                  let s = Unicode.Scalar(text.character(at: start - 1)),
+                  symbolChars.contains(s) {
+                start -= 1
+            }
+            while end < text.length,
+                  let s = Unicode.Scalar(text.character(at: end)),
+                  symbolChars.contains(s) {
+                end += 1
+            }
+            range = NSRange(location: start, length: end - start)
+        }
+        guard range.length > 0 else {
+            NSSound.beep()
+            return
+        }
+        let name = text.substring(with: range)
+        guard let (targetDoc, offset) = findDefinition(of: name) else {
+            NSSound.beep()
+            return
+        }
+        EditorWindowManager.shared.open(targetDoc)
+        DispatchQueue.main.async {
+            if let targetTV = targetDoc.textView {
+                targetTV.setSelectedRange(NSRange(location: offset, length: 0))
+                targetTV.scrollRangeToVisible(
+                    NSRange(location: offset, length: 1))
+                targetTV.window?.makeFirstResponder(targetTV)
+            }
+        }
     }
 }
 

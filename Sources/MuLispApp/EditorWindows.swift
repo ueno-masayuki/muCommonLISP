@@ -1,6 +1,6 @@
 // EditorWindows.swift
-// Detached editor windows: an editor buffer can live in its own NSWindow
-// instead of the main window's tab bar, and move back again.
+// Editor windows: every editor buffer lives in its own NSWindow.
+// Closing the window closes the buffer (with a save prompt when dirty).
 
 #if os(macOS)
 
@@ -8,17 +8,18 @@ import SwiftUI
 import AppKit
 import MuLispCore
 
-/// Tracks the NSWindows hosting detached editor buffers.
+/// Tracks the NSWindows hosting editor buffers.
 final class EditorWindowManager: NSObject, NSWindowDelegate {
     static let shared = EditorWindowManager()
 
     private weak var model: InterpreterModel?
     private weak var editor: EditorState?
     private var windows: [UUID: NSWindow] = [:]
-    /// Documents whose windows are being closed by code (no reattach).
+    /// Documents whose windows are being closed by code (no prompt, the
+    /// caller does the bookkeeping).
     private var closingProgrammatically = Set<UUID>()
-    /// The detached document whose window is currently key (for the File
-    /// menu's save/close actions).
+    /// The document whose window is currently key (for the File menu's
+    /// save/close actions).
     private(set) var activeDetachedID: UUID?
 
     func configure(model: InterpreterModel, editor: EditorState) {
@@ -56,12 +57,18 @@ final class EditorWindowManager: NSObject, NSWindowDelegate {
         return windows[doc.id] != nil
     }
 
-    /// Close a document's window without putting it back into the tab bar
-    /// (used when the buffer itself is closed or reattached by a button).
+    /// Close a document's window without the save prompt (the caller has
+    /// already decided to discard the buffer).
     func close(_ doc: EditorDocument) {
         guard let window = windows[doc.id] else { return }
         closingProgrammatically.insert(doc.id)
         window.close()
+    }
+
+    /// Close a document's window the same way the close button does:
+    /// with the save prompt when the buffer is dirty.
+    func requestClose(_ doc: EditorDocument) {
+        windows[doc.id]?.performClose(nil)
     }
 
     func updateTitle(_ doc: EditorDocument) {
@@ -74,6 +81,31 @@ final class EditorWindowManager: NSObject, NSWindowDelegate {
 
     // MARK: - NSWindowDelegate
 
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let id = documentID(for: sender),
+              !closingProgrammatically.contains(id),
+              let editor = editor,
+              let doc = editor.documents.first(where: { $0.id == id })
+        else { return true }
+        editor.syncFromTextView(doc)
+        guard doc.isDirty else { return true }
+        let alert = NSAlert()
+        alert.messageText =
+            "“\(doc.displayName)” には未保存の変更があります。"
+        alert.informativeText = "閉じる前に保存しますか？"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "保存しない")
+        alert.addButton(withTitle: "キャンセル")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return editor.saveDocument(doc)
+        case .alertSecondButtonReturn:
+            return true
+        default:
+            return false
+        }
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
               let id = documentID(for: window) else { return }
@@ -84,11 +116,11 @@ final class EditorWindowManager: NSObject, NSWindowDelegate {
         if closingProgrammatically.remove(id) != nil {
             return
         }
-        // The user closed the window: return the buffer to the tab bar.
+        // The user closed the window: the buffer is gone with it.
         if let editor = editor,
            let doc = editor.documents.first(where: { $0.id == id }) {
             DispatchQueue.main.async {
-                editor.reattach(doc)
+                editor.forget(doc)
             }
         }
     }
@@ -125,9 +157,10 @@ struct DetachedEditorView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Button("タブへ戻す") {
-                    editor.reattachToTabs(document)
+                Button("定義へ ⌘J") {
+                    editor.jumpToDefinition(from: document)
                 }
+                .keyboardShortcut("j", modifiers: .command)
                 Button("保存") {
                     editor.saveDocument(document)
                 }

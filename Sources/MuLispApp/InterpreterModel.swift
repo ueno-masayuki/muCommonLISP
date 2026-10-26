@@ -19,7 +19,6 @@ struct TranscriptEntry: Identifiable {
 final class InterpreterModel: ObservableObject, GraphicsSink {
 
     @Published var entries: [TranscriptEntry] = []
-    @Published var drawCommands: [DrawCommand] = []
     @Published var isRunning = false
     @Published var inputText = ""
 
@@ -53,10 +52,14 @@ final class InterpreterModel: ObservableObject, GraphicsSink {
 
     // MARK: - GraphicsSink
 
+    /// First drawing command on the main canvas: open its window. The
+    /// window's own model then takes over the context's sink; it comes
+    /// back here when the window is closed.
     func graphicsDidUpdate(_ context: GraphicsContext2D) {
-        let commands = context.snapshot()
+        guard !context.snapshot().isEmpty else { return }
         DispatchQueue.main.async {
-            self.drawCommands = commands
+            GraphicsWindowManager.shared.showMainCanvas(for: context,
+                                                        fallbackSink: self)
         }
     }
 

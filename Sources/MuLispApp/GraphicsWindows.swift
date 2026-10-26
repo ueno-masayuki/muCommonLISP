@@ -53,6 +53,43 @@ final class GraphicsWindowManager: NSObject, NSWindowDelegate {
     private var models: [UUID: WindowCanvasModel] = [:]
     private var lispWindows: [UUID: GraphicsWindow] = [:]
 
+    // The main canvas (draw-line etc. without a window argument) opens
+    // automatically in its own window on the first drawing command.
+    private var mainCanvasWindow: NSWindow?
+    private var mainCanvasModel: WindowCanvasModel?
+    private weak var mainCanvasFallbackSink: GraphicsSink?
+
+    /// Show (or reveal) the window displaying the interpreter's main canvas.
+    /// `fallbackSink` gets the context's updates back once the window closes,
+    /// so the next drawing command reopens it. Call on the main thread.
+    func showMainCanvas(for context: GraphicsContext2D,
+                        fallbackSink: GraphicsSink) {
+        if let window = mainCanvasWindow {
+            window.orderFront(nil)
+            return
+        }
+        let model = WindowCanvasModel(context: context)   // takes over sink
+        mainCanvasModel = model
+        mainCanvasFallbackSink = fallbackSink
+        let content = NSHostingView(
+            rootView: LispWindowCanvasView(model: model))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0,
+                                width: context.canvasWidth,
+                                height: context.canvasHeight),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false)
+        window.title = "グラフィックス"
+        window.contentView = content
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        mainCanvasWindow = window
+        // orderFront, not makeKey: don't steal focus from the REPL input.
+        window.orderFront(nil)
+    }
+
     func open(_ gw: GraphicsWindow) {
         DispatchQueue.main.async {
             if self.nsWindows[gw.id] != nil { return }
@@ -98,6 +135,17 @@ final class GraphicsWindowManager: NSObject, NSWindowDelegate {
     // User clicked the window's close button.
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
+        if window === mainCanvasWindow {
+            // Hand the context's updates back so the next draw reopens
+            // the window.
+            if let sink = mainCanvasFallbackSink {
+                mainCanvasModel?.context.sink = sink
+            }
+            mainCanvasWindow = nil
+            mainCanvasModel = nil
+            mainCanvasFallbackSink = nil
+            return
+        }
         if let (id, gw) = lispWindows.first(where: {
             nsWindows[$0.key] === window
         }).map({ ($0.key, $0.value) }) {

@@ -27,7 +27,7 @@ struct MuLispApp: App {
             ContentView()
                 .environmentObject(model)
                 .environmentObject(editor)
-                .frame(minWidth: 980, minHeight: 620)
+                .frame(minWidth: 520, minHeight: 420)
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -42,8 +42,7 @@ struct MuLispApp: App {
                 .keyboardShortcut("o", modifiers: .command)
             }
             CommandGroup(replacing: .saveItem) {
-                // These act on the key detached window's buffer when one is
-                // key, else on the selected tab.
+                // These act on the key editor window's buffer.
                 Button("保存") {
                     editor.saveDocument(editor.menuTargetDocument)
                 }
@@ -55,12 +54,6 @@ struct MuLispApp: App {
                 .keyboardShortcut("s", modifiers: [.command, .shift])
 
                 Divider()
-
-                Button("別ウィンドウで開く") {
-                    if let doc = editor.selectedDocument {
-                        editor.detach(doc)
-                    }
-                }
 
                 Button("バッファを閉じる") {
                     if let doc = editor.menuTargetDocument {
