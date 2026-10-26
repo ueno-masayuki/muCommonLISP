@@ -31,7 +31,7 @@ struct EditorPaneView: View {
     private var tabBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                ForEach(editor.documents) { doc in
+                ForEach(editor.tabbedDocuments) { doc in
                     tabButton(doc)
                 }
                 Button {
@@ -53,12 +53,21 @@ struct EditorPaneView: View {
                 .font(.system(size: 12))
                 .lineLimit(1)
             Button {
+                editor.detach(doc)
+            } label: {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 8))
+            }
+            .buttonStyle(.borderless)
+            .help("別ウィンドウで開く")
+            Button {
                 editor.closeDocument(doc)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 8))
             }
             .buttonStyle(.borderless)
+            .help("バッファを閉じる")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
@@ -69,6 +78,10 @@ struct EditorPaneView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             editor.selectedID = doc.id
+        }
+        .contextMenu {
+            Button("別ウィンドウで開く") { editor.detach(doc) }
+            Button("閉じる") { editor.closeDocument(doc) }
         }
     }
 
@@ -145,7 +158,11 @@ struct EditorPaneView: View {
             NSSound.beep()
             return
         }
-        editor.selectedID = targetDoc.id
+        if editor.detachedIDs.contains(targetDoc.id) {
+            EditorWindowManager.shared.focus(targetDoc)
+        } else {
+            editor.selectedID = targetDoc.id
+        }
         DispatchQueue.main.async {
             if let targetTV = targetDoc.textView {
                 let r = NSRange(location: offset, length: 0)

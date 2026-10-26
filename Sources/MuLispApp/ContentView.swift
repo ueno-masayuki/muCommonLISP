@@ -14,6 +14,7 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             VSplitView {
+                // (onAppear below wires the detached-window manager.)
                 if editor.isVisible {
                     EditorPaneView()
                         .frame(minHeight: 180, idealHeight: 340,
@@ -27,6 +28,9 @@ struct ContentView: View {
             CanvasView()
                 .frame(minWidth: 300, maxWidth: .infinity,
                        maxHeight: .infinity)
+        }
+        .onAppear {
+            EditorWindowManager.shared.configure(model: model, editor: editor)
         }
         .toolbar {
             ToolbarItemGroup {

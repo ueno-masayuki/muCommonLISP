@@ -72,7 +72,10 @@ struct LispTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let tv = textView else { return }
             document.text = tv.string
-            document.isDirty = true
+            if !document.isDirty {
+                document.isDirty = true
+                EditorWindowManager.shared.updateTitle(document)
+            }
             highlightAll()
         }
 

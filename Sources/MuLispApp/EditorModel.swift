@@ -34,14 +34,67 @@ final class EditorState: ObservableObject {
     @Published var documents: [EditorDocument] = []
     @Published var selectedID: UUID?
     @Published var isVisible = true
+    /// Buffers currently shown in their own window instead of the tab bar.
+    @Published var detachedIDs: Set<UUID> = []
 
     init() {
         newDocument()
     }
 
+    /// Buffers shown in the main window's tab bar.
+    var tabbedDocuments: [EditorDocument] {
+        return documents.filter { !detachedIDs.contains($0.id) }
+    }
+
     var selectedDocument: EditorDocument? {
-        guard let id = selectedID else { return documents.first }
-        return documents.first { $0.id == id }
+        if let id = selectedID, !detachedIDs.contains(id),
+           let doc = documents.first(where: { $0.id == id }) {
+            return doc
+        }
+        return tabbedDocuments.first
+    }
+
+    /// The buffer File-menu actions should operate on: the key detached
+    /// window's buffer when one is key, else the selected tab.
+    var menuTargetDocument: EditorDocument? {
+        if let id = EditorWindowManager.shared.activeDetachedID,
+           let doc = documents.first(where: { $0.id == id }) {
+            return doc
+        }
+        return selectedDocument
+    }
+
+    // MARK: - Detached windows
+
+    /// Move a buffer out of the tab bar into its own window.
+    func detach(_ doc: EditorDocument) {
+        guard !detachedIDs.contains(doc.id) else {
+            EditorWindowManager.shared.focus(doc)
+            return
+        }
+        syncFromTextView(doc)
+        doc.textView = nil
+        detachedIDs.insert(doc.id)
+        if selectedID == doc.id {
+            selectedID = tabbedDocuments.first?.id
+        }
+        EditorWindowManager.shared.open(doc)
+    }
+
+    /// Called when a detached window was closed by the user: the buffer
+    /// returns to the tab bar.
+    func reattach(_ doc: EditorDocument) {
+        syncFromTextView(doc)
+        doc.textView = nil
+        detachedIDs.remove(doc.id)
+        selectedID = doc.id
+        isVisible = true
+    }
+
+    /// Button action: close the window and return the buffer to the tabs.
+    func reattachToTabs(_ doc: EditorDocument) {
+        EditorWindowManager.shared.close(doc)
+        reattach(doc)
     }
 
     @discardableResult
@@ -67,7 +120,11 @@ final class EditorState: ObservableObject {
     func open(url: URL) {
         isVisible = true
         if let existing = documents.first(where: { $0.url == url }) {
-            selectedID = existing.id
+            if detachedIDs.contains(existing.id) {
+                EditorWindowManager.shared.focus(existing)
+            } else {
+                selectedID = existing.id
+            }
             return
         }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
@@ -101,17 +158,22 @@ final class EditorState: ObservableObject {
             try doc.text.write(to: url, atomically: true, encoding: .utf8)
             doc.url = url
             doc.isDirty = false
+            EditorWindowManager.shared.updateTitle(doc)
         } catch {
             NSSound.beep()
         }
     }
 
     func closeDocument(_ doc: EditorDocument) {
+        if detachedIDs.contains(doc.id) {
+            EditorWindowManager.shared.close(doc)
+            detachedIDs.remove(doc.id)
+        }
         documents.removeAll { $0.id == doc.id }
         if selectedID == doc.id {
-            selectedID = documents.last?.id
+            selectedID = tabbedDocuments.last?.id
         }
-        if documents.isEmpty {
+        if tabbedDocuments.isEmpty && detachedIDs.isEmpty {
             newDocument()
         }
     }

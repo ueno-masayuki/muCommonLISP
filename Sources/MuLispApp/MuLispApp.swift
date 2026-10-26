@@ -42,20 +42,28 @@ struct MuLispApp: App {
                 .keyboardShortcut("o", modifiers: .command)
             }
             CommandGroup(replacing: .saveItem) {
+                // These act on the key detached window's buffer when one is
+                // key, else on the selected tab.
                 Button("保存") {
-                    editor.saveDocument(editor.selectedDocument)
+                    editor.saveDocument(editor.menuTargetDocument)
                 }
                 .keyboardShortcut("s", modifiers: .command)
 
                 Button("別名で保存…") {
-                    editor.saveDocument(editor.selectedDocument, as: true)
+                    editor.saveDocument(editor.menuTargetDocument, as: true)
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
 
                 Divider()
 
-                Button("バッファを閉じる") {
+                Button("別ウィンドウで開く") {
                     if let doc = editor.selectedDocument {
+                        editor.detach(doc)
+                    }
+                }
+
+                Button("バッファを閉じる") {
+                    if let doc = editor.menuTargetDocument {
                         editor.closeDocument(doc)
                     }
                 }
