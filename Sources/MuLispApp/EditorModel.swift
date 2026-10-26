@@ -68,12 +68,14 @@ final class EditorState: ObservableObject {
     }
 
     /// The buffer File-menu actions operate on: the key editor window's.
+    /// With no editor window key, only an unambiguous (single) buffer is
+    /// targeted — never silently an arbitrary one.
     var menuTargetDocument: EditorDocument? {
         if let id = EditorWindowManager.shared.activeDetachedID,
            let doc = documents.first(where: { $0.id == id }) {
             return doc
         }
-        return documents.first
+        return documents.count == 1 ? documents.first : nil
     }
 
     @discardableResult
@@ -151,7 +153,8 @@ final class EditorState: ObservableObject {
         var inString = false
         var inComment = false
         var formStart: Int? = nil
-        var best: (Int, Int)? = nil     // [start, end)
+        var containing: (Int, Int)? = nil   // form around the cursor
+        var preceding: (Int, Int)? = nil    // last form ending before it
         var i = 0
         while i < chars.count {
             let c = chars[i]
@@ -181,10 +184,9 @@ final class EditorState: ObservableObject {
                 if depth == 0, let start = formStart {
                     let end = i + 1
                     if position >= start && position <= end {
-                        best = (start, end)
-                    }
-                    if best == nil && start <= position {
-                        best = (start, end)
+                        containing = (start, end)
+                    } else if end <= position {
+                        preceding = (start, end)
                     }
                     formStart = nil
                 }
@@ -194,7 +196,7 @@ final class EditorState: ObservableObject {
             }
             i += 1
         }
-        guard let (s, e) = best else { return nil }
+        guard let (s, e) = containing ?? preceding else { return nil }
         let startIdx = text.index(text.startIndex, offsetBy: s)
         let endIdx = text.index(text.startIndex, offsetBy: min(e, chars.count))
         return startIdx..<endIdx

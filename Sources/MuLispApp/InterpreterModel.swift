@@ -167,6 +167,11 @@ final class InterpreterModel: ObservableObject, GraphicsSink {
             } catch is ExitSignal {
                 resultEntries.append(TranscriptEntry(
                     kind: .output, text: ";; (exit)"))
+            } catch let t as LispThrowSignal {
+                let tag = Printer.toString(t.tag, escape: true,
+                                           interp: self.interp)
+                resultEntries.append(TranscriptEntry(
+                    kind: .error, text: ";; ERROR: uncaught throw to \(tag)"))
             } catch {
                 resultEntries.append(TranscriptEntry(
                     kind: .error, text: ";; ERROR: \(error)"))
