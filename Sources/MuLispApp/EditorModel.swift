@@ -50,6 +50,7 @@ final class EditorState: ObservableObject {
             text: ";; muCommonLISP editor — ⌘E で評価, ⌘⇧E でバッファ全体を評価\n\n")
         documents.append(doc)
         selectedID = doc.id
+        isVisible = true
         return doc
     }
 
@@ -64,6 +65,7 @@ final class EditorState: ObservableObject {
     }
 
     func open(url: URL) {
+        isVisible = true
         if let existing = documents.first(where: { $0.url == url }) {
             selectedID = existing.id
             return
@@ -73,6 +75,12 @@ final class EditorState: ObservableObject {
             return
         }
         let doc = EditorDocument(url: url, text: text)
+        // Drop the pristine untitled buffer when a real file comes in.
+        if documents.count == 1,
+           let only = documents.first,
+           only.url == nil, !only.isDirty {
+            documents.removeAll()
+        }
         documents.append(doc)
         selectedID = doc.id
     }

@@ -30,7 +30,37 @@ struct MuLispApp: App {
                 .frame(minWidth: 980, minHeight: 620)
         }
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("新規バッファ") {
+                    editor.newDocument()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
+                Button("開く…") {
+                    editor.openDocument()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
+            CommandGroup(replacing: .saveItem) {
+                Button("保存") {
+                    editor.saveDocument(editor.selectedDocument)
+                }
+                .keyboardShortcut("s", modifiers: .command)
+
+                Button("別名で保存…") {
+                    editor.saveDocument(editor.selectedDocument, as: true)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("バッファを閉じる") {
+                    if let doc = editor.selectedDocument {
+                        editor.closeDocument(doc)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: [.command, .option])
+            }
         }
     }
 }

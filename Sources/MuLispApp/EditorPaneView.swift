@@ -41,7 +41,6 @@ struct EditorPaneView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("新規バッファ (⌘N)")
-                .keyboardShortcut("n", modifiers: .command)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
@@ -75,10 +74,9 @@ struct EditorPaneView: View {
 
     private var commandBar: some View {
         HStack(spacing: 10) {
+            // File operations are also in the File menu (⌘O / ⌘S / ⇧⌘S).
             Button("開く…") { editor.openDocument() }
-                .keyboardShortcut("o", modifiers: .command)
             Button("保存") { editor.saveDocument(editor.selectedDocument) }
-                .keyboardShortcut("s", modifiers: .command)
             Button("別名保存…") {
                 editor.saveDocument(editor.selectedDocument, as: true)
             }
