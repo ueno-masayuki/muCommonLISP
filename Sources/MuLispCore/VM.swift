@@ -260,7 +260,8 @@ public final class VM {
                 case .opNumEq:
                     let b = stack.removeLast().firstValue
                     let a = stack.removeLast().firstValue
-                    stack.append(try numeric { try NumericOps.compare(a, b) == 0 }
+                    // numericEqual (not compare) so complex numbers work.
+                    stack.append(try numeric { try NumericOps.numericEqual(a, b) }
                                  ? interp.tValue : .null)
                 case .opNumLt:
                     let b = stack.removeLast().firstValue

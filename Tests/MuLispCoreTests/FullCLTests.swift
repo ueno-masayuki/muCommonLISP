@@ -549,12 +549,13 @@ final class PackageAndIOTests: XCTestCase {
     }
 
     func testReaderMacro() {
+        // A reader macro returns a FORM; quote it to inspect the raw result.
         XCTAssertEqual(ev(interp, """
             (set-macro-character #\\$
               (lambda (stream char)
                 (declare (ignore char))
                 (list 'dollars (read stream))))
-            (car (list $5))
+            (car '($5))
             """), "(DOLLARS 5)")
         XCTAssertEqual(ev(interp, "'#.(+ 1 2)"), "3")
     }

@@ -289,6 +289,7 @@ enum Prelude {
 (defvar %loop-acc-kind%)
 (defvar %loop-result-kind%)
 (defvar %loop-block%)
+(defvar %loop-into-reverses%)
 
 (defun %loop-bind-pattern (pattern)
   (if (symbolp pattern)
@@ -312,6 +313,10 @@ enum Prelude {
   (if (%loop-kw-p (car tail) "INTO")
       (let ((var (cadr tail)))
         (push (list var init) %loop-bindings%)
+        ;; collect builds backwards; INTO variables are user-visible, so
+        ;; reverse them once after the loop body finishes.
+        (when (eq kind 'collect)
+          (push var %loop-into-reverses%))
         (values var (cddr tail)))
       (progn
         (setq %loop-acc-kind% kind)
@@ -528,6 +533,7 @@ enum Prelude {
         (%loop-acc-kind% nil)
         (%loop-result-kind% nil)
         (%loop-block% nil)
+        (%loop-into-reverses% nil)
         (rest clauses))
     (when (%loop-kw-p (car rest) "NAMED")
       (setq %loop-block% (cadr rest))
@@ -612,6 +618,8 @@ enum Prelude {
              ,@(reverse %loop-presets%)
              ,@(reverse %loop-dos%)
              ,@(reverse %loop-steps%))
+           ,@(mapcar (lambda (v) `(setq ,v (reverse ,v)))
+                     %loop-into-reverses%)
            ,@(reverse %loop-finallys%)
            ,result)))))
 
