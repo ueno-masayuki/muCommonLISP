@@ -164,4 +164,5 @@ muCL> (make-graphics-window :title "plot")
 
 ## ライセンス・用途
 
+[MIT ライセンス](LICENSE)で公開しています。
 教育・研究・プロトタイピング用途を想定しています。
